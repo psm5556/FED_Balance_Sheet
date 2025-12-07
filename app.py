@@ -51,52 +51,70 @@ st.markdown("""
 # FRED API 키 (GitHub Secrets에서 가져오기)
 FRED_API_KEY = st.secrets.get("FRED_API_KEY", "")
 
-# FRED 데이터 시리즈 정보 (ID, 링크, 하이라이트 여부, 분류)
+# FRED 데이터 시리즈 정보 (ID, 링크, 하이라이트 여부, 분류, 설명, 유동성 영향)
 SERIES_INFO = {
     "총자산 (Total Assets)": {
         "id": "WALCL",
         "highlight": False,
-        "category": "자산 (Assets)"
-    },
-    "지급준비금 (Reserve Balances)": {
-        "id": "WRESBAL",
-        "highlight": True,
-        "category": "부채 (Liabilities)"
-    },
-    "TGA (재무부 일반계정)": {
-        "id": "WTREGEN",
-        "highlight": True,
-        "category": "부채 (Liabilities)"
-    },
-    "RRP (역레포)": {
-        "id": "RRPONTSYD",
-        "highlight": False,
-        "category": "부채 (Liabilities)"
+        "category": "자산 (Assets)",
+        "description": "연준의 전체 자산 규모",
+        "liquidity_impact": "증가 시 시장 유동성 ↑"
     },
     "연준 보유 증권 (Securities Held)": {
         "id": "WSHOSHO",
         "highlight": False,
-        "category": "자산 (Assets)"
+        "category": "자산 (Assets)",
+        "description": "연준이 보유한 국채 및 MBS",
+        "liquidity_impact": "증가 시 시장 유동성 ↑"
     },
     "SRF (상설레포)": {
         "id": "RPONTSYD",
         "highlight": True,
-        "category": "자산 (Assets)"
+        "category": "자산 (Assets)",
+        "description": "은행에 제공하는 단기 대출",
+        "liquidity_impact": "증가 시 은행 유동성 ↑"
     },
     "대출 (Loans)": {
         "id": "WLCFLPCL",
         "highlight": False,
-        "category": "자산 (Assets)"
+        "category": "자산 (Assets)",
+        "description": "연준의 금융기관 대출",
+        "liquidity_impact": "증가 시 시장 유동성 ↑"
+    },
+    "지급준비금 (Reserve Balances)": {
+        "id": "WRESBAL",
+        "highlight": True,
+        "category": "부채 (Liabilities)",
+        "description": "은행들이 연준에 예치한 자금",
+        "liquidity_impact": "증가 시 은행 유동성 ↑"
+    },
+    "TGA (재무부 일반계정)": {
+        "id": "WTREGEN",
+        "highlight": True,
+        "category": "부채 (Liabilities)",
+        "description": "미 재무부의 연준 예금",
+        "liquidity_impact": "증가 시 시장 유동성 ↓"
+    },
+    "RRP (역레포)": {
+        "id": "RRPONTSYD",
+        "highlight": False,
+        "category": "부채 (Liabilities)",
+        "description": "MMF 등의 초단기 자금 흡수",
+        "liquidity_impact": "증가 시 시장 유동성 ↓"
     },
     "MMF (Money Market Funds)": {
         "id": "MMMFFAQ027S",
         "highlight": False,
-        "category": "부채 (Liabilities)"
+        "category": "부채 (Liabilities)",
+        "description": "머니마켓펀드 총 자산",
+        "liquidity_impact": "증가 시 현금 보유 선호 ↑"
     },
     "총부채 (Total Liabilities)": {
         "id": "WALCL",
         "highlight": False,
-        "category": "부채 (Liabilities)"
+        "category": "부채 (Liabilities)",
+        "description": "연준의 전체 부채 규모",
+        "liquidity_impact": "구조 변화가 유동성에 영향"
     }
 }
 
@@ -167,67 +185,89 @@ def main():
         sample_data = {
             "분류": [
                 "자산",
-                "부채",
-                "부채",
-                "부채",
                 "자산",
                 "자산",
                 "자산",
+                "부채",
+                "부채",
+                "부채",
                 "부채",
                 "부채"
             ],
             "항목": [
                 "총자산 (Total Assets)",
-                "지급준비금 (Reserve Balances)",
-                "TGA (재무부 일반계정)",
-                "RRP (역레포)",
                 "연준 보유 증권 (Securities Held)",
                 "SRF (상설레포)",
                 "대출 (Loans)",
+                "지급준비금 (Reserve Balances)",
+                "TGA (재무부 일반계정)",
+                "RRP (역레포)",
                 "MMF (Money Market Funds)",
                 "총부채 (Total Liabilities)"
             ],
+            "설명": [
+                "연준의 전체 자산 규모",
+                "연준이 보유한 국채 및 MBS",
+                "은행에 제공하는 단기 대출",
+                "연준의 금융기관 대출",
+                "은행들이 연준에 예치한 자금",
+                "미 재무부의 연준 예금",
+                "MMF 등의 초단기 자금 흡수",
+                "머니마켓펀드 총 자산",
+                "연준의 전체 부채 규모"
+            ],
             "현재 값": [
                 "6,535,781",
-                "2,878,165",
-                "908,523",
-                "332,669",
                 "6,244,751",
                 "1",
                 "7,915",
+                "2,878,165",
+                "908,523",
+                "332,669",
                 "6,489,869",
                 "6,535,781"
             ],
             "이전 값": [
                 "6,552,419",
-                "2,897,987",
-                "899,678",
-                "332,399",
                 "6,247,237",
                 "14,000",
                 "7,876",
+                "2,897,987",
+                "899,678",
+                "332,399",
                 "6,506,556",
                 "6,552,419"
             ],
             "변화": [
                 "▼ 16,638",
-                "▼ 19,822",
-                "▲ 8,845",
-                "▲ 270",
                 "▼ 2,486",
                 "▼ 13,999",
                 "▲ 39",
+                "▼ 19,822",
+                "▲ 8,845",
+                "▲ 270",
                 "▼ 16,687",
                 "▼ 16,638"
             ],
+            "유동성 영향": [
+                "증가 시 시장 유동성 ↑",
+                "증가 시 시장 유동성 ↑",
+                "증가 시 은행 유동성 ↑",
+                "증가 시 시장 유동성 ↑",
+                "증가 시 은행 유동성 ↑",
+                "증가 시 시장 유동성 ↓",
+                "증가 시 시장 유동성 ↓",
+                "증가 시 현금 보유 선호 ↑",
+                "구조 변화가 유동성에 영향"
+            ],
             "출처": [
                 "🔗 WALCL",
-                "🔗 WRESBAL",
-                "🔗 WTREGEN",
-                "🔗 RRPONTSYD",
                 "🔗 WSHOSHO",
                 "🔗 RPONTSYD",
                 "🔗 WLCFLPCL",
+                "🔗 WRESBAL",
+                "🔗 WTREGEN",
+                "🔗 RRPONTSYD",
                 "🔗 MMMFFAQ027S",
                 "🔗 WALCL"
             ]
@@ -235,17 +275,11 @@ def main():
         
         df_sample = pd.DataFrame(sample_data)
         
-        # 스타일 적용
-        def highlight_rows(row):
-            if row["항목"] in ["지급준비금 (Reserve Balances)", "TGA (재무부 일반계정)", "SRF (상설레포)"]:
-                return ['background-color: #3d3d00; border: 2px solid #ffd700'] * len(row)
-            return [''] * len(row)
-        
         st.dataframe(
             df_sample,
             hide_index=True,
             use_container_width=True,
-            height=400
+            height=450
         )
         
         st.info("💡 위 데이터는 예시입니다. FRED API 키를 설정하면 실시간 데이터를 확인할 수 있습니다.")
@@ -259,6 +293,8 @@ def main():
             series_id = info["id"]
             highlight = info["highlight"]
             category = info["category"]
+            description = info["description"]
+            liquidity_impact = info["liquidity_impact"]
             
             df = fetch_fred_data(series_id, FRED_API_KEY)
             
@@ -271,9 +307,11 @@ def main():
                 data_list.append({
                     "분류": category,
                     "항목": name,
+                    "설명": description,
                     "현재 값": format_number(current_value),
                     "이전 값": format_number(previous_value),
                     "변화": format_change(change),
+                    "유동성 영향": liquidity_impact,
                     "출처": f'<a href="{get_fred_link(series_id)}" target="_blank">🔗 {series_id}</a>',
                     "하이라이트": highlight,
                     "변화_수치": change,  # 정렬용
@@ -283,9 +321,11 @@ def main():
                 data_list.append({
                     "분류": category,
                     "항목": name,
+                    "설명": description,
                     "현재 값": "N/A",
                     "이전 값": "N/A",
                     "변화": "N/A",
+                    "유동성 영향": liquidity_impact,
                     "출처": f'<a href="{get_fred_link(series_id)}" target="_blank">🔗 {series_id}</a>',
                     "하이라이트": highlight,
                     "변화_수치": 0,
@@ -306,12 +346,14 @@ def main():
     # HTML 테이블로 표시 (링크 지원)
     html_table = "<table style='width:100%; border-collapse: collapse;'>"
     html_table += "<thead><tr style='background-color: #2d2d2d;'>"
-    html_table += "<th style='padding: 12px; text-align: left; color: white;'>분류</th>"
-    html_table += "<th style='padding: 12px; text-align: left; color: white;'>항목</th>"
-    html_table += "<th style='padding: 12px; text-align: right; color: white;'>현재 값</th>"
-    html_table += "<th style='padding: 12px; text-align: right; color: white;'>이전 값</th>"
-    html_table += "<th style='padding: 12px; text-align: right; color: white;'>변화</th>"
-    html_table += "<th style='padding: 12px; text-align: center; color: white;'>출처</th>"
+    html_table += "<th style='padding: 12px; text-align: left; color: white; width: 8%;'>분류</th>"
+    html_table += "<th style='padding: 12px; text-align: left; color: white; width: 18%;'>항목</th>"
+    html_table += "<th style='padding: 12px; text-align: left; color: white; width: 15%;'>설명</th>"
+    html_table += "<th style='padding: 12px; text-align: right; color: white; width: 12%;'>현재 값</th>"
+    html_table += "<th style='padding: 12px; text-align: right; color: white; width: 12%;'>이전 값</th>"
+    html_table += "<th style='padding: 12px; text-align: right; color: white; width: 12%;'>변화</th>"
+    html_table += "<th style='padding: 12px; text-align: left; color: white; width: 15%;'>유동성 영향</th>"
+    html_table += "<th style='padding: 12px; text-align: center; color: white; width: 8%;'>출처</th>"
     html_table += "</tr></thead><tbody>"
     
     current_category = None
@@ -322,7 +364,7 @@ def main():
         # 분류가 바뀔 때 구분선 추가
         if current_category != row["분류"]:
             if current_category is not None:
-                html_table += "<tr style='height: 10px; background-color: #0e1117;'><td colspan='6'></td></tr>"
+                html_table += "<tr style='height: 10px; background-color: #0e1117;'><td colspan='8'></td></tr>"
             current_category = row["분류"]
         
         # 변화 색상 적용
@@ -334,13 +376,24 @@ def main():
         else:
             change_color = "color: white;"
         
+        # 유동성 영향 색상 적용
+        liquidity_text = row["유동성 영향"]
+        if "↑" in liquidity_text and "유동성" in liquidity_text:
+            liquidity_color = "color: #4ade80;"  # 초록색
+        elif "↓" in liquidity_text:
+            liquidity_color = "color: #f87171;"  # 빨간색
+        else:
+            liquidity_color = "color: #fbbf24;"  # 노란색
+        
         html_table += f"<tr style='background-color: {bg_color}; {border_style}'>"
-        html_table += f"<td style='padding: 12px; color: #9ca3af; font-weight: 600;'>{row['분류']}</td>"
-        html_table += f"<td style='padding: 12px; color: white;'>{row['항목']}</td>"
-        html_table += f"<td style='padding: 12px; text-align: right; color: white;'>{row['현재 값']}</td>"
-        html_table += f"<td style='padding: 12px; text-align: right; color: white;'>{row['이전 값']}</td>"
-        html_table += f"<td style='padding: 12px; text-align: right; {change_color}'><b>{change_text}</b></td>"
-        html_table += f"<td style='padding: 12px; text-align: center;'>{row['출처']}</td>"
+        html_table += f"<td style='padding: 12px; color: #9ca3af; font-weight: 600; font-size: 13px;'>{row['분류']}</td>"
+        html_table += f"<td style='padding: 12px; color: white; font-size: 14px;'>{row['항목']}</td>"
+        html_table += f"<td style='padding: 12px; color: #d1d5db; font-size: 13px;'>{row['설명']}</td>"
+        html_table += f"<td style='padding: 12px; text-align: right; color: white; font-size: 14px;'>{row['현재 값']}</td>"
+        html_table += f"<td style='padding: 12px; text-align: right; color: white; font-size: 14px;'>{row['이전 값']}</td>"
+        html_table += f"<td style='padding: 12px; text-align: right; {change_color} font-size: 14px;'><b>{change_text}</b></td>"
+        html_table += f"<td style='padding: 12px; {liquidity_color} font-size: 13px;'><b>{liquidity_text}</b></td>"
+        html_table += f"<td style='padding: 12px; text-align: center; font-size: 13px;'>{row['출처']}</td>"
         html_table += "</tr>"
     
     html_table += "</tbody></table>"
@@ -350,10 +403,41 @@ def main():
     # 추가 정보
     st.markdown("---")
     st.markdown("""
-    ### 📌 참고사항
-    - **하이라이트 항목**: 지급준비금, TGA, SRF는 주요 모니터링 항목입니다.
-    - **데이터 주기**: 주간 단위로 업데이트됩니다.
-    - **출처 링크**: 각 항목의 🔗 링크를 클릭하면 FRED 원본 데이터를 확인할 수 있습니다.
+    ### 📌 항목별 상세 설명
+    
+    #### 💰 자산 항목 (Assets)
+    - **총자산**: 연준 대차대조표의 전체 자산 규모. 증가하면 통화량 증가로 시장 유동성이 높아집니다.
+    - **연준 보유 증권**: 국채와 주택저당증권(MBS)을 매입하여 시장에 유동성을 공급합니다. 양적완화(QE)의 핵심 지표입니다.
+    - **SRF (상설레포)**: 은행이 담보를 제공하고 연준으로부터 단기 자금을 조달하는 시설입니다. 증가하면 은행의 유동성이 개선됩니다.
+    - **대출**: 연준이 금융기관에 제공하는 긴급 유동성입니다. 증가하면 금융 시스템의 스트레스를 나타낼 수 있습니다.
+    
+    #### 💳 부채 항목 (Liabilities)
+    - **지급준비금**: 은행들이 연준에 예치한 초과 준비금입니다. 증가하면 은행의 대출 여력이 높아집니다.
+    - **TGA (재무부 일반계정)**: 미 재무부가 연준에 보관하는 현금입니다. 증가하면 시장에서 유동성이 빠져나가 긴축 효과를 냅니다.
+    - **RRP (역레포)**: 머니마켓펀드 등이 초단기로 연준에 자금을 예치하는 제도입니다. 증가하면 시장 유동성이 흡수됩니다.
+    - **MMF**: 머니마켓펀드의 총 자산 규모입니다. 증가는 투자자들이 안전자산을 선호함을 의미합니다.
+    
+    ### 💡 유동성 해석 가이드
+    
+    **시장 유동성 증가 요인 (긍정적)**
+    - 연준 보유 증권 ↑ (QE)
+    - 지급준비금 ↑
+    - 대출 ↑
+    - TGA ↓ (재무부 지출)
+    - RRP ↓
+    
+    **시장 유동성 감소 요인 (긴축적)**
+    - 연준 보유 증권 ↓ (QT)
+    - 지급준비금 ↓
+    - TGA ↑ (세금 징수)
+    - RRP ↑
+    
+    ---
+    
+    ### 🔍 주요 모니터링 포인트
+    - **하이라이트 항목** (금색 테두리): 지급준비금, TGA, SRF는 단기 유동성 변화를 파악하는 핵심 지표입니다.
+    - **데이터 주기**: 주간 단위로 업데이트됩니다 (매주 목요일 발표).
+    - **출처 링크**: 각 항목의 🔗 링크를 클릭하면 FRED 원본 데이터와 차트를 확인할 수 있습니다.
     """)
     
     st.caption("데이터 출처: Federal Reserve Economic Data (FRED) - St. Louis Federal Reserve Bank")
