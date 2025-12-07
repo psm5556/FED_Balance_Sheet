@@ -51,43 +51,52 @@ st.markdown("""
 # FRED API 키 (GitHub Secrets에서 가져오기)
 FRED_API_KEY = st.secrets.get("FRED_API_KEY", "")
 
-# FRED 데이터 시리즈 정보 (ID, 링크, 하이라이트 여부)
+# FRED 데이터 시리즈 정보 (ID, 링크, 하이라이트 여부, 분류)
 SERIES_INFO = {
     "총자산 (Total Assets)": {
         "id": "WALCL",
-        "highlight": False
+        "highlight": False,
+        "category": "자산 (Assets)"
     },
     "지급준비금 (Reserve Balances)": {
         "id": "WRESBAL",
-        "highlight": True
+        "highlight": True,
+        "category": "부채 (Liabilities)"
     },
     "TGA (재무부 일반계정)": {
         "id": "WTREGEN",
-        "highlight": True
+        "highlight": True,
+        "category": "부채 (Liabilities)"
     },
     "RRP (역레포)": {
         "id": "RRPONTSYD",
-        "highlight": False
+        "highlight": False,
+        "category": "부채 (Liabilities)"
     },
     "연준 보유 증권 (Securities Held)": {
         "id": "WSHOSHO",
-        "highlight": False
+        "highlight": False,
+        "category": "자산 (Assets)"
     },
     "SRF (상설레포)": {
-        "id": "WLSRF",
-        "highlight": True
+        "id": "RPONTSYD",
+        "highlight": True,
+        "category": "자산 (Assets)"
     },
     "대출 (Loans)": {
         "id": "WLCFLPCL",
-        "highlight": False
+        "highlight": False,
+        "category": "자산 (Assets)"
     },
     "MMF (Money Market Funds)": {
         "id": "MMMFFAQ027S",
-        "highlight": False
+        "highlight": False,
+        "category": "부채 (Liabilities)"
     },
     "총부채 (Total Liabilities)": {
         "id": "WALCL",
-        "highlight": False
+        "highlight": False,
+        "category": "부채 (Liabilities)"
     }
 }
 
@@ -156,6 +165,17 @@ def main():
         st.subheader("샘플 데이터 (예시)")
         
         sample_data = {
+            "분류": [
+                "자산",
+                "부채",
+                "부채",
+                "부채",
+                "자산",
+                "자산",
+                "자산",
+                "부채",
+                "부채"
+            ],
             "항목": [
                 "총자산 (Total Assets)",
                 "지급준비금 (Reserve Balances)",
@@ -206,7 +226,7 @@ def main():
                 "🔗 WTREGEN",
                 "🔗 RRPONTSYD",
                 "🔗 WSHOSHO",
-                "🔗 WLSRF",
+                "🔗 RPONTSYD",
                 "🔗 WLCFLPCL",
                 "🔗 MMMFFAQ027S",
                 "🔗 WALCL"
@@ -238,6 +258,7 @@ def main():
         for name, info in SERIES_INFO.items():
             series_id = info["id"]
             highlight = info["highlight"]
+            category = info["category"]
             
             df = fetch_fred_data(series_id, FRED_API_KEY)
             
@@ -248,31 +269,36 @@ def main():
                 date = df.iloc[0]["date"]
                 
                 data_list.append({
+                    "분류": category,
                     "항목": name,
                     "현재 값": format_number(current_value),
                     "이전 값": format_number(previous_value),
                     "변화": format_change(change),
                     "출처": f'<a href="{get_fred_link(series_id)}" target="_blank">🔗 {series_id}</a>',
                     "하이라이트": highlight,
-                    "변화_수치": change  # 정렬용
+                    "변화_수치": change,  # 정렬용
+                    "분류_순서": 0 if "자산" in category else 1  # 자산 먼저, 부채 나중
                 })
             else:
                 data_list.append({
+                    "분류": category,
                     "항목": name,
                     "현재 값": "N/A",
                     "이전 값": "N/A",
                     "변화": "N/A",
                     "출처": f'<a href="{get_fred_link(series_id)}" target="_blank">🔗 {series_id}</a>',
                     "하이라이트": highlight,
-                    "변화_수치": 0
+                    "변화_수치": 0,
+                    "분류_순서": 0 if "자산" in category else 1
                 })
     
     if not data_list:
         st.error("데이터를 불러올 수 없습니다.")
         return
     
-    # DataFrame 생성
+    # DataFrame 생성 및 정렬 (자산 먼저, 부채 나중)
     df_display = pd.DataFrame(data_list)
+    df_display = df_display.sort_values(by=["분류_순서", "항목"])
     
     # 테이블 표시
     st.markdown("### 📊 Fed Balance Sheet 데이터")
@@ -280,6 +306,7 @@ def main():
     # HTML 테이블로 표시 (링크 지원)
     html_table = "<table style='width:100%; border-collapse: collapse;'>"
     html_table += "<thead><tr style='background-color: #2d2d2d;'>"
+    html_table += "<th style='padding: 12px; text-align: left; color: white;'>분류</th>"
     html_table += "<th style='padding: 12px; text-align: left; color: white;'>항목</th>"
     html_table += "<th style='padding: 12px; text-align: right; color: white;'>현재 값</th>"
     html_table += "<th style='padding: 12px; text-align: right; color: white;'>이전 값</th>"
@@ -287,9 +314,16 @@ def main():
     html_table += "<th style='padding: 12px; text-align: center; color: white;'>출처</th>"
     html_table += "</tr></thead><tbody>"
     
+    current_category = None
     for _, row in df_display.iterrows():
         bg_color = "#3d3d00" if row["하이라이트"] else "#1e1e1e"
         border_style = "border: 2px solid #ffd700;" if row["하이라이트"] else ""
+        
+        # 분류가 바뀔 때 구분선 추가
+        if current_category != row["분류"]:
+            if current_category is not None:
+                html_table += "<tr style='height: 10px; background-color: #0e1117;'><td colspan='6'></td></tr>"
+            current_category = row["분류"]
         
         # 변화 색상 적용
         change_text = row["변화"]
@@ -301,6 +335,7 @@ def main():
             change_color = "color: white;"
         
         html_table += f"<tr style='background-color: {bg_color}; {border_style}'>"
+        html_table += f"<td style='padding: 12px; color: #9ca3af; font-weight: 600;'>{row['분류']}</td>"
         html_table += f"<td style='padding: 12px; color: white;'>{row['항목']}</td>"
         html_table += f"<td style='padding: 12px; text-align: right; color: white;'>{row['현재 값']}</td>"
         html_table += f"<td style='padding: 12px; text-align: right; color: white;'>{row['이전 값']}</td>"
