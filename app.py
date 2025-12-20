@@ -81,6 +81,27 @@ SERIES_INFO = {
         "description": "연준의 금융기관 대출",
         "liquidity_impact": "증가 시 시장 유동성 ↑"
     },
+    "  ㄴ Primary Credit": {
+        "id": "WLCFLPCL",
+        "highlight": False,
+        "category": "자산 (Assets)",
+        "description": "할인창구 1차 신용대출",
+        "liquidity_impact": "증가 시 은행 유동성 ↑"
+    },
+    "  ㄴ Secondary Credit": {
+        "id": "WLCFLSCL",
+        "highlight": False,
+        "category": "자산 (Assets)",
+        "description": "할인창구 2차 신용대출",
+        "liquidity_impact": "증가 시 은행 유동성 ↑"
+    },
+    "  ㄴ Seasonal Credit": {
+        "id": "WDISCWIN",
+        "highlight": False,
+        "category": "자산 (Assets)",
+        "description": "할인창구 계절성 신용대출",
+        "liquidity_impact": "증가 시 은행 유동성 ↑"
+    },
     "지급준비금 (Reserve Balances)": {
         "id": "WRESBAL",
         "highlight": True,
@@ -107,6 +128,13 @@ SERIES_INFO = {
         "highlight": False,
         "category": "부채 (Liabilities)",
         "description": "머니마켓펀드 총 자산",
+        "liquidity_impact": "증가 시 현금 보유 선호 ↑"
+    },
+    "Retail MMF": {
+        "id": "WRMFNS",
+        "highlight": False,
+        "category": "부채 (Liabilities)",
+        "description": "개인투자자용 머니마켓펀드",
         "liquidity_impact": "증가 시 현금 보유 선호 ↑"
     },
     "총부채 (Total Liabilities)": {
@@ -188,6 +216,10 @@ def main():
                 "자산",
                 "자산",
                 "자산",
+                "자산",
+                "자산",
+                "자산",
+                "부채",
                 "부채",
                 "부채",
                 "부채",
@@ -199,10 +231,14 @@ def main():
                 "연준 보유 증권 (Securities Held)",
                 "SRF (상설레포)",
                 "대출 (Loans)",
+                "  ㄴ Primary Credit",
+                "  ㄴ Secondary Credit",
+                "  ㄴ Seasonal Credit",
                 "지급준비금 (Reserve Balances)",
                 "TGA (재무부 일반계정)",
                 "RRP (역레포)",
                 "MMF (Money Market Funds)",
+                "Retail MMF",
                 "총부채 (Total Liabilities)"
             ],
             "설명": [
@@ -210,10 +246,14 @@ def main():
                 "연준이 보유한 국채 및 MBS",
                 "은행에 제공하는 단기 대출",
                 "연준의 금융기관 대출",
+                "할인창구 1차 신용대출",
+                "할인창구 2차 신용대출",
+                "할인창구 계절성 신용대출",
                 "은행들이 연준에 예치한 자금",
                 "미 재무부의 연준 예금",
                 "MMF 등의 초단기 자금 흡수",
                 "머니마켓펀드 총 자산",
+                "개인투자자용 머니마켓펀드",
                 "연준의 전체 부채 규모"
             ],
             "현재 값": [
@@ -221,10 +261,14 @@ def main():
                 "6,244,751",
                 "1",
                 "7,915",
+                "7,500",
+                "200",
+                "215",
                 "2,878,165",
                 "908,523",
                 "332,669",
                 "6,489,869",
+                "2,100,000",
                 "6,535,781"
             ],
             "이전 값": [
@@ -232,10 +276,14 @@ def main():
                 "6,247,237",
                 "14,000",
                 "7,876",
+                "7,400",
+                "250",
+                "226",
                 "2,897,987",
                 "899,678",
                 "332,399",
                 "6,506,556",
+                "2,095,000",
                 "6,552,419"
             ],
             "변화": [
@@ -243,10 +291,14 @@ def main():
                 "▼ 2,486",
                 "▼ 13,999",
                 "▲ 39",
+                "▲ 100",
+                "▼ 50",
+                "▼ 11",
                 "▼ 19,822",
                 "▲ 8,845",
                 "▲ 270",
                 "▼ 16,687",
+                "▲ 5,000",
                 "▼ 16,638"
             ],
             "유동성 영향": [
@@ -255,8 +307,12 @@ def main():
                 "증가 시 은행 유동성 ↑",
                 "증가 시 시장 유동성 ↑",
                 "증가 시 은행 유동성 ↑",
+                "증가 시 은행 유동성 ↑",
+                "증가 시 은행 유동성 ↑",
+                "증가 시 은행 유동성 ↑",
                 "증가 시 시장 유동성 ↓",
                 "증가 시 시장 유동성 ↓",
+                "증가 시 현금 보유 선호 ↑",
                 "증가 시 현금 보유 선호 ↑",
                 "구조 변화가 유동성에 영향"
             ],
@@ -265,10 +321,14 @@ def main():
                 "🔗 WSHOSHO",
                 "🔗 RPONTSYD",
                 "🔗 WLCFLPCL",
+                "🔗 WLCFLPCL",
+                "🔗 WLCFLSCL",
+                "🔗 WDISCWIN",
                 "🔗 WRESBAL",
                 "🔗 WTREGEN",
                 "🔗 RRPONTSYD",
                 "🔗 MMMFFAQ027S",
+                "🔗 WRMFNS",
                 "🔗 WALCL"
             ]
         }
@@ -279,7 +339,7 @@ def main():
             df_sample,
             hide_index=True,
             use_container_width=True,
-            height=450
+            height=550
         )
         
         st.info("💡 위 데이터는 예시입니다. FRED API 키를 설정하면 실시간 데이터를 확인할 수 있습니다.")
@@ -361,6 +421,9 @@ def main():
         bg_color = "#3d3d00" if row["하이라이트"] else "#1e1e1e"
         border_style = "border: 2px solid #ffd700;" if row["하이라이트"] else ""
         
+        # 세부 항목 스타일링 (들여쓰기)
+        indent_style = "padding-left: 30px;" if row["항목"].startswith("  ㄴ") else ""
+        
         # 분류가 바뀔 때 구분선 추가
         if current_category != row["분류"]:
             if current_category is not None:
@@ -387,7 +450,7 @@ def main():
         
         html_table += f"<tr style='background-color: {bg_color}; {border_style}'>"
         html_table += f"<td style='padding: 12px; color: #9ca3af; font-weight: 600; font-size: 13px;'>{row['분류']}</td>"
-        html_table += f"<td style='padding: 12px; color: white; font-size: 14px;'>{row['항목']}</td>"
+        html_table += f"<td style='padding: 12px; {indent_style} color: white; font-size: 14px;'>{row['항목']}</td>"
         html_table += f"<td style='padding: 12px; color: #d1d5db; font-size: 13px;'>{row['설명']}</td>"
         html_table += f"<td style='padding: 12px; text-align: right; color: white; font-size: 14px;'>{row['현재 값']}</td>"
         html_table += f"<td style='padding: 12px; text-align: right; color: white; font-size: 14px;'>{row['이전 값']}</td>"
@@ -410,12 +473,16 @@ def main():
     - **연준 보유 증권**: 국채와 주택저당증권(MBS)을 매입하여 시장에 유동성을 공급합니다. 양적완화(QE)의 핵심 지표입니다.
     - **SRF (상설레포)**: 은행이 담보를 제공하고 연준으로부터 단기 자금을 조달하는 시설입니다. 증가하면 은행의 유동성이 개선됩니다.
     - **대출**: 연준이 금융기관에 제공하는 긴급 유동성입니다. 증가하면 금융 시스템의 스트레스를 나타낼 수 있습니다.
+      - **Primary Credit**: 재무건전성이 양호한 은행에 제공하는 할인창구 1차 신용대출
+      - **Secondary Credit**: 재무상태가 취약한 은행에 제공하는 할인창구 2차 신용대출 (금리가 더 높음)
+      - **Seasonal Credit**: 계절적 자금 수요가 있는 소규모 은행에 제공하는 대출
     
     #### 💳 부채 항목 (Liabilities)
     - **지급준비금**: 은행들이 연준에 예치한 초과 준비금입니다. 증가하면 은행의 대출 여력이 높아집니다.
     - **TGA (재무부 일반계정)**: 미 재무부가 연준에 보관하는 현금입니다. 증가하면 시장에서 유동성이 빠져나가 긴축 효과를 냅니다.
     - **RRP (역레포)**: 머니마켓펀드 등이 초단기로 연준에 자금을 예치하는 제도입니다. 증가하면 시장 유동성이 흡수됩니다.
     - **MMF**: 머니마켓펀드의 총 자산 규모입니다. 증가는 투자자들이 안전자산을 선호함을 의미합니다.
+    - **Retail MMF**: 개인투자자가 주로 이용하는 머니마켓펀드입니다. 개인의 현금 선호도를 나타냅니다.
     
     ### 💡 유동성 해석 가이드
     
