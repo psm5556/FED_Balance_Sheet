@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 from datetime import datetime, timedelta
+import plotly.graph_objects as go
 
 # 페이지 설정
 st.set_page_config(
@@ -59,7 +60,8 @@ SERIES_INFO = {
         "category": "자산 (Assets)",
         "description": "연준의 전체 자산 규모",
         "liquidity_impact": "증가 시 시장 유동성 ↑",
-        "order": 1
+        "order": 1,
+        "show_chart": True
     },
     "연준 보유 증권 (Securities Held)": {
         "id": "WSHOSHO",
@@ -67,7 +69,8 @@ SERIES_INFO = {
         "category": "자산 (Assets)",
         "description": "연준이 보유한 국채 및 MBS",
         "liquidity_impact": "증가 시 시장 유동성 ↑",
-        "order": 2
+        "order": 2,
+        "show_chart": False
     },
     "SRF (상설레포)": {
         "id": "RPONTSYD",
@@ -75,7 +78,8 @@ SERIES_INFO = {
         "category": "자산 (Assets)",
         "description": "은행에 제공하는 단기 대출",
         "liquidity_impact": "증가 시 은행 유동성 ↑",
-        "order": 3
+        "order": 3,
+        "show_chart": True
     },
     "대출 (Loans)": {
         "id": "WLCFLPCL",
@@ -83,7 +87,8 @@ SERIES_INFO = {
         "category": "자산 (Assets)",
         "description": "연준의 금융기관 대출",
         "liquidity_impact": "증가 시 시장 유동성 ↑",
-        "order": 4
+        "order": 4,
+        "show_chart": False
     },
     "  ㄴ Primary Credit": {
         "id": "WLCFLPCL",
@@ -91,7 +96,8 @@ SERIES_INFO = {
         "category": "자산 (Assets)",
         "description": "할인창구 1차 신용대출",
         "liquidity_impact": "증가 시 은행 유동성 ↑",
-        "order": 5
+        "order": 5,
+        "show_chart": True
     },
     "  ㄴ Secondary Credit": {
         "id": "WLCFLSCL",
@@ -99,7 +105,8 @@ SERIES_INFO = {
         "category": "자산 (Assets)",
         "description": "할인창구 2차 신용대출",
         "liquidity_impact": "증가 시 은행 유동성 ↑",
-        "order": 6
+        "order": 6,
+        "show_chart": False
     },
     "  ㄴ Seasonal Credit": {
         "id": "WLCFLSECL",
@@ -107,7 +114,8 @@ SERIES_INFO = {
         "category": "자산 (Assets)",
         "description": "할인창구 계절성 신용대출",
         "liquidity_impact": "증가 시 은행 유동성 ↑",
-        "order": 7
+        "order": 7,
+        "show_chart": False
     },
     "지급준비금 (Reserve Balances)": {
         "id": "WRESBAL",
@@ -115,7 +123,8 @@ SERIES_INFO = {
         "category": "부채 (Liabilities)",
         "description": "은행들이 연준에 예치한 자금",
         "liquidity_impact": "증가 시 은행 유동성 ↑",
-        "order": 8
+        "order": 8,
+        "show_chart": True
     },
     "TGA (재무부 일반계정)": {
         "id": "WTREGEN",
@@ -123,7 +132,8 @@ SERIES_INFO = {
         "category": "부채 (Liabilities)",
         "description": "미 재무부의 연준 예금",
         "liquidity_impact": "증가 시 시장 유동성 ↓",
-        "order": 9
+        "order": 9,
+        "show_chart": True
     },
     "RRP (역레포)": {
         "id": "RRPONTSYD",
@@ -131,7 +141,8 @@ SERIES_INFO = {
         "category": "부채 (Liabilities)",
         "description": "MMF 등의 초단기 자금 흡수",
         "liquidity_impact": "증가 시 시장 유동성 ↓",
-        "order": 10
+        "order": 10,
+        "show_chart": True
     },
     "MMF (Money Market Funds)": {
         "id": "MMMFFAQ027S",
@@ -139,7 +150,8 @@ SERIES_INFO = {
         "category": "부채 (Liabilities)",
         "description": "머니마켓펀드 총 자산",
         "liquidity_impact": "증가 시 현금 보유 선호 ↑",
-        "order": 11
+        "order": 11,
+        "show_chart": True
     },
     "Retail MMF": {
         "id": "WRMFNS",
@@ -147,7 +159,8 @@ SERIES_INFO = {
         "category": "부채 (Liabilities)",
         "description": "개인투자자용 머니마켓펀드",
         "liquidity_impact": "증가 시 현금 보유 선호 ↑",
-        "order": 12
+        "order": 12,
+        "show_chart": False
     },
     "총부채 (Total Liabilities)": {
         "id": "WALCL",
@@ -155,12 +168,13 @@ SERIES_INFO = {
         "category": "부채 (Liabilities)",
         "description": "연준의 전체 부채 규모",
         "liquidity_impact": "구조 변화가 유동성에 영향",
-        "order": 13
+        "order": 13,
+        "show_chart": False
     }
 }
 
 @st.cache_data(ttl=3600)
-def fetch_fred_data(series_id, api_key):
+def fetch_fred_data(series_id, api_key, limit=10):
     """FRED API에서 데이터 가져오기"""
     if not api_key:
         return None
@@ -171,7 +185,7 @@ def fetch_fred_data(series_id, api_key):
         "api_key": api_key,
         "file_type": "json",
         "sort_order": "desc",
-        "limit": 10
+        "limit": limit
     }
     
     try:
@@ -209,6 +223,50 @@ def format_change(change):
 def get_fred_link(series_id):
     """FRED 시리즈 링크 생성"""
     return f"https://fred.stlouisfed.org/series/{series_id}"
+
+def create_chart(df, title, series_id):
+    """Plotly 차트 생성"""
+    if df is None or len(df) == 0:
+        return None
+    
+    # 데이터를 날짜 순으로 정렬
+    df_sorted = df.sort_values('date')
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=df_sorted['date'],
+        y=df_sorted['value'],
+        mode='lines+markers',
+        name=title,
+        line=dict(color='#64b5f6', width=2),
+        marker=dict(size=6, color='#64b5f6'),
+        hovertemplate='<b>%{x|%Y-%m-%d}</b><br>값: $%{y:,.0f}M<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        title=dict(
+            text=f"{title} - 최근 추이",
+            font=dict(size=18, color='white')
+        ),
+        xaxis=dict(
+            title="날짜",
+            gridcolor='#2d2d2d',
+            color='white'
+        ),
+        yaxis=dict(
+            title="금액 ($M)",
+            gridcolor='#2d2d2d',
+            color='white'
+        ),
+        plot_bgcolor='#0e1117',
+        paper_bgcolor='#0e1117',
+        font=dict(color='white'),
+        hovermode='x unified',
+        height=400
+    )
+    
+    return fig
 
 # 메인 앱
 def main():
@@ -361,6 +419,7 @@ def main():
     # 실제 데이터 가져오기
     with st.spinner("데이터를 불러오는 중..."):
         data_list = []
+        chart_data = {}
         
         for name, info in SERIES_INFO.items():
             series_id = info["id"]
@@ -369,8 +428,15 @@ def main():
             description = info["description"]
             liquidity_impact = info["liquidity_impact"]
             order = info["order"]
+            show_chart = info.get("show_chart", False)
             
-            df = fetch_fred_data(series_id, FRED_API_KEY)
+            # 테이블용 최근 2개 데이터
+            df = fetch_fred_data(series_id, FRED_API_KEY, limit=10)
+            
+            # 차트용 더 많은 데이터 (최근 52주 = 1년)
+            if show_chart:
+                df_chart = fetch_fred_data(series_id, FRED_API_KEY, limit=52)
+                chart_data[name] = {"df": df_chart, "series_id": series_id}
             
             if df is not None and len(df) >= 2:
                 current_value = df.iloc[0]["value"]
@@ -476,6 +542,25 @@ def main():
     html_table += "</tbody></table>"
     
     st.markdown(html_table, unsafe_allow_html=True)
+    
+    # 차트 섹션
+    st.markdown("---")
+    st.markdown("### 📈 주요 항목 추이 (최근 52주)")
+    
+    # 차트를 2열로 표시
+    chart_names = list(chart_data.keys())
+    for i in range(0, len(chart_names), 2):
+        cols = st.columns(2)
+        
+        for j, col in enumerate(cols):
+            if i + j < len(chart_names):
+                name = chart_names[i + j]
+                data = chart_data[name]
+                
+                with col:
+                    fig = create_chart(data["df"], name, data["series_id"])
+                    if fig:
+                        st.plotly_chart(fig, use_container_width=True)
     
     # 추가 정보
     st.markdown("---")
