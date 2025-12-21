@@ -1110,9 +1110,9 @@ def main():
                         <p style='color: white; margin: 5px 0 0 0; font-size: 14px;'>
                             Score: <span style='color: black; background-color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold;'>{fg_data['score']:.1f}/100</span>
                         </p>
-                        <p style='color: #9ca3af; margin: 5px 0 0 0; font-size: 12px;'>
-                            {fg_data.get('source', 'N/A')}
-                        </p>
+                        # <p style='color: #9ca3af; margin: 5px 0 0 0; font-size: 12px;'>
+                        #     {fg_data.get('source', 'N/A')}
+                        # </p>
                     </div>
                     """, unsafe_allow_html=True)
                     
@@ -1138,11 +1138,11 @@ def main():
                         mode="gauge+number",
                         value=vix_data["value"],
                         domain={'x': [0, 1], 'y': [0, 1]},
-                        title={'text': f"{vix_data['emoji']} VIX Index", 'font': {'size': 24, 'color': 'white'}},
-                        number={'font': {'size': 50, 'color': 'black', 'family': 'Arial Black'}},
+                        title={'text': f"{vix_data['emoji']} VIX Index", 'font': {'size': 18, 'color': '#83858C'}},
+                        number={'font': {'size': 40, 'color': '#83858C', 'family': 'Arial Black'}},
                         gauge={
                             'axis': {'range': [0, 80], 'tickwidth': 1, 'tickcolor': "black"},
-                            'bar': {'color': vix_data["color"], 'thickness': 0.75},
+                            # 'bar': {'color': vix_data["color"], 'thickness': 0.75},
                             'bgcolor': "white",
                             'borderwidth': 2,
                             'bordercolor': "gray",
@@ -1174,7 +1174,7 @@ def main():
                     st.markdown(f"""
                     <div style='text-align: center; padding: 15px; background-color: {vix_data['color']}20; 
                                 border-radius: 10px; border: 2px solid {vix_data['color']};'>
-                        <h2 style='color: {vix_data['color']}; margin: 0;'>{vix_data['emoji']} {vix_data['status']}</h2>
+                        <h3 style='color: {vix_data['color']}; margin: 0;'>{vix_data['emoji']} {vix_data['status']}</h3>
                         <p style='color: white; margin: 5px 0 0 0; font-size: 14px;'>
                             VIX: <span style='color: black; background-color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold;'>{vix_data['value']:.2f}</span> | {vix_data['description']}
                         </p>
