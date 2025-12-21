@@ -556,71 +556,21 @@ def create_components_chart(df_components, series_ids):
 def get_fear_greed_index():
     """CNN Fear & Greed Index 가져오기"""
     try:
-        # CNN Fear & Greed Index API
+        # 방법 1: CNN API (새 엔드포인트)
         url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-        response = requests.get(url, timeout=10)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code == 200:
             data = response.json()
             
-            # 현재 점수 가져오기
             if 'fear_and_greed' in data:
                 score = float(data['fear_and_greed']['score'])
                 rating = data['fear_and_greed']['rating']
                 
                 # 상태에 따른 색상 및 이모지 설정
-                if score >= 75:
-                    status = "Extreme Greed"
-                    color = "#16a34a"  # 진한 초록
-                    emoji = "🤑"
-                elif score >= 55:
-                    status = "Greed"
-                    color = "#22c55e"  # 초록
-                    emoji = "😊"
-                elif score >= 45:
-                    status = "Neutral"
-                    color = "#eab308"  # 노랑
-                    emoji = "😐"
-                elif score >= 25:
-                    status = "Fear"
-                    color = "#f97316"  # 주황
-                    emoji = "😨"
-                else:
-                    status = "Extreme Fear"
-                    color = "#dc2626"  # 빨강
-                    emoji = "😱"
-                
-                return {
-                    "score": score,
-                    "status": status,
-                    "rating": rating,
-                    "color": color,
-                    "emoji": emoji
-                }
-    except Exception as e:
-        st.error(f"Fear & Greed 데이터 로딩 실패: {e}")
-        
-        # 실패 시 VIX 기반 대체 계산
-        try:
-            df_vix = fetch_fred_data("VIXCLS", FRED_API_KEY, limit=1)
-            
-            if df_vix is not None and len(df_vix) > 0:
-                vix_value = df_vix.iloc[0]["value"]
-                
-                # VIX 기반 Fear & Greed 점수 계산 (0-100)
-                if vix_value <= 12:
-                    score = 80 + (12 - vix_value) * 4
-                elif vix_value <= 17:
-                    score = 60 + (17 - vix_value) * 4
-                elif vix_value <= 25:
-                    score = 40 + (25 - vix_value) * 2.5
-                elif vix_value <= 35:
-                    score = 20 + (35 - vix_value) * 2
-                else:
-                    score = max(0, 20 - (vix_value - 35))
-                
-                score = max(0, min(100, score))
-                
                 if score >= 75:
                     status = "Extreme Greed"
                     color = "#16a34a"
@@ -645,12 +595,116 @@ def get_fear_greed_index():
                 return {
                     "score": score,
                     "status": status,
-                    "rating": f"VIX-based ({vix_value:.2f})",
+                    "rating": rating,
                     "color": color,
-                    "emoji": emoji
+                    "emoji": emoji,
+                    "source": "CNN API"
                 }
-        except:
-            pass
+    except Exception as e:
+        pass
+    
+    try:
+        # 방법 2: Alternative Fear and Greed API
+        url = "https://api.alternative.me/fng/?limit=1"
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            if 'data' in data and len(data['data']) > 0:
+                score = float(data['data'][0]['value'])
+                
+                # 상태 판단
+                if score >= 75:
+                    status = "Extreme Greed"
+                    color = "#16a34a"
+                    emoji = "🤑"
+                elif score >= 55:
+                    status = "Greed"
+                    color = "#22c55e"
+                    emoji = "😊"
+                elif score >= 45:
+                    status = "Neutral"
+                    color = "#eab308"
+                    emoji = "😐"
+                elif score >= 25:
+                    status = "Fear"
+                    color = "#f97316"
+                    emoji = "😨"
+                else:
+                    status = "Extreme Fear"
+                    color = "#dc2626"
+                    emoji = "😱"
+                
+                return {
+                    "score": score,
+                    "status": status,
+                    "rating": data['data'][0]['value_classification'],
+                    "color": color,
+                    "emoji": emoji,
+                    "source": "Crypto F&G (참고용)"
+                }
+    except Exception as e:
+        pass
+    
+    # 방법 3: VIX 기반 계산
+    try:
+        df_vix = fetch_fred_data("VIXCLS", FRED_API_KEY, limit=1)
+        
+        if df_vix is not None and len(df_vix) > 0:
+            vix_value = float(df_vix.iloc[0]["value"])
+            
+            # VIX 기반 Fear & Greed 점수 계산 (역관계)
+            # VIX가 낮을수록 탐욕, 높을수록 공포
+            if vix_value <= 12:
+                score = 85
+            elif vix_value <= 15:
+                score = 75
+            elif vix_value <= 20:
+                score = 60
+            elif vix_value <= 25:
+                score = 50
+            elif vix_value <= 30:
+                score = 40
+            elif vix_value <= 35:
+                score = 30
+            elif vix_value <= 40:
+                score = 20
+            else:
+                score = 10
+            
+            # 상태 판단
+            if score >= 75:
+                status = "Extreme Greed"
+                color = "#16a34a"
+                emoji = "🤑"
+            elif score >= 55:
+                status = "Greed"
+                color = "#22c55e"
+                emoji = "😊"
+            elif score >= 45:
+                status = "Neutral"
+                color = "#eab308"
+                emoji = "😐"
+            elif score >= 25:
+                status = "Fear"
+                color = "#f97316"
+                emoji = "😨"
+            else:
+                status = "Extreme Fear"
+                color = "#dc2626"
+                emoji = "😱"
+            
+            return {
+                "score": score,
+                "status": status,
+                "rating": f"VIX 기반 추정 (VIX: {vix_value:.2f})",
+                "color": color,
+                "emoji": emoji,
+                "source": "VIX 기반 계산"
+            }
+    except Exception as e:
+        st.error(f"모든 Fear & Greed 데이터 소스 실패: {e}")
     
     return None
 
@@ -1055,6 +1109,9 @@ def main():
                         <h2 style='color: {fg_data['color']}; margin: 0;'>{fg_data['emoji']} {fg_data['status']}</h2>
                         <p style='color: white; margin: 5px 0 0 0; font-size: 14px;'>
                             Score: <span style='color: black; background-color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold;'>{fg_data['score']:.1f}/100</span>
+                        </p>
+                        <p style='color: #9ca3af; margin: 5px 0 0 0; font-size: 12px;'>
+                            {fg_data.get('source', 'N/A')}
                         </p>
                     </div>
                     """, unsafe_allow_html=True)
