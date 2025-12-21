@@ -1071,10 +1071,9 @@ def main():
                         value=fg_data["score"],
                         domain={'x': [0, 1], 'y': [0, 1]},
                         title={'text': f"{fg_data['emoji']} Fear & Greed Index", 'font': {'size': 18, 'color': '#83858C'}},
-                        # number={'suffix': "", 'font': {'size': 40, 'color': '#83858C', 'family': 'Arial Black'}},
-                        number={'font': {'size': 40, 'color': '#83858C', 'family': 'Arial Black'}},
+                        number={'suffix': "", 'font': {'size': 40, 'color': '#83858C', 'family': 'Arial Black'}},
                         gauge={
-                            'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "black"},
+                            'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "#83858C"},
                             'bar': {'color': fg_data["color"], 'thickness': 0.75},
                             'bgcolor': "white",
                             'borderwidth': 2,
@@ -1139,7 +1138,7 @@ def main():
                         title={'text': f"{vix_data['emoji']} VIX Index", 'font': {'size': 18, 'color': '#83858C'}},
                         number={'font': {'size': 40, 'color': '#83858C', 'family': 'Arial Black'}},
                         gauge={
-                            'axis': {'range': [0, 80], 'tickwidth': 1, 'tickcolor': "black"},
+                            'axis': {'range': [0, 80], 'tickwidth': 1, 'tickcolor': "#83858C"},
                             # 'bar': {'color': vix_data["color"], 'thickness': 0.75},
                             'bgcolor': "white",
                             'borderwidth': 2,
