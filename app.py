@@ -1070,8 +1070,8 @@ def main():
                         mode="gauge+number+delta",
                         value=fg_data["score"],
                         domain={'x': [0, 1], 'y': [0, 1]},
-                        title={'text': f"{fg_data['emoji']} Fear & Greed Index", 'font': {'size': 24, 'color': 'white'}},
-                        number={'suffix': "", 'font': {'size': 50, 'color': 'black', 'family': 'Arial Black'}},
+                        title={'text': f"{fg_data['emoji']} Fear & Greed Index", 'font': {'size': 18, 'color': '#83858C'}},
+                        number={'suffix': "", 'font': {'size': 40, 'color': '#83858C', 'family': 'Arial Black'}},
                         gauge={
                             'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "black"},
                             'bar': {'color': fg_data["color"], 'thickness': 0.75},
@@ -1106,7 +1106,7 @@ def main():
                     st.markdown(f"""
                     <div style='text-align: center; padding: 15px; background-color: {fg_data['color']}20; 
                                 border-radius: 10px; border: 2px solid {fg_data['color']};'>
-                        <h2 style='color: {fg_data['color']}; margin: 0;'>{fg_data['emoji']} {fg_data['status']}</h2>
+                        <h3 style='color: {fg_data['color']}; margin: 0;'>{fg_data['emoji']} {fg_data['status']}</h3>
                         <p style='color: white; margin: 5px 0 0 0; font-size: 14px;'>
                             Score: <span style='color: black; background-color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold;'>{fg_data['score']:.1f}/100</span>
                         </p>
