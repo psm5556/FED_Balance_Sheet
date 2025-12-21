@@ -1107,7 +1107,7 @@ def main():
                     <div style='text-align: center; padding: 15px; background-color: {fg_data['color']}20; 
                                 border-radius: 10px; border: 2px solid {fg_data['color']};'>
                         <h3 style='color: {fg_data['color']}; margin: 0;'>{fg_data['emoji']} {fg_data['status']}</h3>
-                        <p style='color: white; margin: 5px 0 0 0; font-size: 14px;'>
+                        <p style='color: #83858C; margin: 5px 0 0 0; font-size: 14px;'>
                             Score: <span style='color: black; background-color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold;'>{fg_data['score']:.1f}/100</span>
                         </p>
                     </div>
@@ -1172,7 +1172,7 @@ def main():
                     <div style='text-align: center; padding: 15px; background-color: {vix_data['color']}20; 
                                 border-radius: 10px; border: 2px solid {vix_data['color']};'>
                         <h3 style='color: {vix_data['color']}; margin: 0;'>{vix_data['emoji']} {vix_data['status']}</h3>
-                        <p style='color: white; margin: 5px 0 0 0; font-size: 14px;'>
+                        <p style='color: #83858C; margin: 5px 0 0 0; font-size: 14px;'>
                             VIX: <span style='color: black; background-color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold;'>{vix_data['value']:.2f}</span> | {vix_data['description']}
                         </p>
                     </div>
