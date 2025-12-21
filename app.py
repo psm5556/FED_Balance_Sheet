@@ -1110,9 +1110,6 @@ def main():
                         <p style='color: white; margin: 5px 0 0 0; font-size: 14px;'>
                             Score: <span style='color: black; background-color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold;'>{fg_data['score']:.1f}/100</span>
                         </p>
-                        # <p style='color: #9ca3af; margin: 5px 0 0 0; font-size: 12px;'>
-                        #     {fg_data.get('source', 'N/A')}
-                        # </p>
                     </div>
                     """, unsafe_allow_html=True)
                     
