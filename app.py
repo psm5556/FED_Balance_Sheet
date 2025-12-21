@@ -51,98 +51,111 @@ st.markdown("""
 # FRED API 키 (GitHub Secrets에서 가져오기)
 FRED_API_KEY = st.secrets.get("FRED_API_KEY", "")
 
-# FRED 데이터 시리즈 정보 (ID, 링크, 하이라이트 여부, 분류, 설명, 유동성 영향)
+# FRED 데이터 시리즈 정보 (ID, 링크, 하이라이트 여부, 분류, 설명, 유동성 영향, 순서)
 SERIES_INFO = {
     "총자산 (Total Assets)": {
         "id": "WALCL",
         "highlight": False,
         "category": "자산 (Assets)",
         "description": "연준의 전체 자산 규모",
-        "liquidity_impact": "증가 시 시장 유동성 ↑"
+        "liquidity_impact": "증가 시 시장 유동성 ↑",
+        "order": 1
     },
     "연준 보유 증권 (Securities Held)": {
         "id": "WSHOSHO",
         "highlight": False,
         "category": "자산 (Assets)",
         "description": "연준이 보유한 국채 및 MBS",
-        "liquidity_impact": "증가 시 시장 유동성 ↑"
+        "liquidity_impact": "증가 시 시장 유동성 ↑",
+        "order": 2
     },
     "SRF (상설레포)": {
         "id": "RPONTSYD",
         "highlight": True,
         "category": "자산 (Assets)",
         "description": "은행에 제공하는 단기 대출",
-        "liquidity_impact": "증가 시 은행 유동성 ↑"
+        "liquidity_impact": "증가 시 은행 유동성 ↑",
+        "order": 3
     },
     "대출 (Loans)": {
         "id": "WLCFLPCL",
         "highlight": False,
         "category": "자산 (Assets)",
         "description": "연준의 금융기관 대출",
-        "liquidity_impact": "증가 시 시장 유동성 ↑"
+        "liquidity_impact": "증가 시 시장 유동성 ↑",
+        "order": 4
     },
     "  ㄴ Primary Credit": {
         "id": "WLCFLPCL",
         "highlight": False,
         "category": "자산 (Assets)",
         "description": "할인창구 1차 신용대출",
-        "liquidity_impact": "증가 시 은행 유동성 ↑"
+        "liquidity_impact": "증가 시 은행 유동성 ↑",
+        "order": 5
     },
     "  ㄴ Secondary Credit": {
         "id": "WLCFLSCL",
         "highlight": False,
         "category": "자산 (Assets)",
         "description": "할인창구 2차 신용대출",
-        "liquidity_impact": "증가 시 은행 유동성 ↑"
+        "liquidity_impact": "증가 시 은행 유동성 ↑",
+        "order": 6
     },
     "  ㄴ Seasonal Credit": {
         "id": "WLCFLSECL",
         "highlight": False,
         "category": "자산 (Assets)",
         "description": "할인창구 계절성 신용대출",
-        "liquidity_impact": "증가 시 은행 유동성 ↑"
+        "liquidity_impact": "증가 시 은행 유동성 ↑",
+        "order": 7
     },
     "지급준비금 (Reserve Balances)": {
         "id": "WRESBAL",
         "highlight": True,
         "category": "부채 (Liabilities)",
         "description": "은행들이 연준에 예치한 자금",
-        "liquidity_impact": "증가 시 은행 유동성 ↑"
+        "liquidity_impact": "증가 시 은행 유동성 ↑",
+        "order": 8
     },
     "TGA (재무부 일반계정)": {
         "id": "WTREGEN",
         "highlight": True,
         "category": "부채 (Liabilities)",
         "description": "미 재무부의 연준 예금",
-        "liquidity_impact": "증가 시 시장 유동성 ↓"
+        "liquidity_impact": "증가 시 시장 유동성 ↓",
+        "order": 9
     },
     "RRP (역레포)": {
         "id": "RRPONTSYD",
         "highlight": False,
         "category": "부채 (Liabilities)",
         "description": "MMF 등의 초단기 자금 흡수",
-        "liquidity_impact": "증가 시 시장 유동성 ↓"
+        "liquidity_impact": "증가 시 시장 유동성 ↓",
+        "order": 10
     },
     "MMF (Money Market Funds)": {
         "id": "MMMFFAQ027S",
         "highlight": False,
         "category": "부채 (Liabilities)",
         "description": "머니마켓펀드 총 자산",
-        "liquidity_impact": "증가 시 현금 보유 선호 ↑"
+        "liquidity_impact": "증가 시 현금 보유 선호 ↑",
+        "order": 11
     },
     "Retail MMF": {
         "id": "WRMFNS",
         "highlight": False,
         "category": "부채 (Liabilities)",
         "description": "개인투자자용 머니마켓펀드",
-        "liquidity_impact": "증가 시 현금 보유 선호 ↑"
+        "liquidity_impact": "증가 시 현금 보유 선호 ↑",
+        "order": 12
     },
     "총부채 (Total Liabilities)": {
         "id": "WALCL",
         "highlight": False,
         "category": "부채 (Liabilities)",
         "description": "연준의 전체 부채 규모",
-        "liquidity_impact": "구조 변화가 유동성에 영향"
+        "liquidity_impact": "구조 변화가 유동성에 영향",
+        "order": 13
     }
 }
 
@@ -355,6 +368,7 @@ def main():
             category = info["category"]
             description = info["description"]
             liquidity_impact = info["liquidity_impact"]
+            order = info["order"]
             
             df = fetch_fred_data(series_id, FRED_API_KEY)
             
@@ -374,8 +388,8 @@ def main():
                     "유동성 영향": liquidity_impact,
                     "출처": f'<a href="{get_fred_link(series_id)}" target="_blank">🔗 {series_id}</a>',
                     "하이라이트": highlight,
-                    "변화_수치": change,  # 정렬용
-                    "분류_순서": 0 if "자산" in category else 1  # 자산 먼저, 부채 나중
+                    "변화_수치": change,
+                    "순서": order
                 })
             else:
                 data_list.append({
@@ -389,16 +403,16 @@ def main():
                     "출처": f'<a href="{get_fred_link(series_id)}" target="_blank">🔗 {series_id}</a>',
                     "하이라이트": highlight,
                     "변화_수치": 0,
-                    "분류_순서": 0 if "자산" in category else 1
+                    "순서": order
                 })
     
     if not data_list:
         st.error("데이터를 불러올 수 없습니다.")
         return
     
-    # DataFrame 생성 및 정렬 (자산 먼저, 부채 나중)
+    # DataFrame 생성 및 정렬 (순서 번호로 정렬)
     df_display = pd.DataFrame(data_list)
-    df_display = df_display.sort_values(by=["분류_순서", "항목"])
+    df_display = df_display.sort_values(by=["순서"])
     
     # 테이블 표시
     st.markdown("### 📊 Fed Balance Sheet 데이터")
