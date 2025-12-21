@@ -60,7 +60,7 @@ except:
 
 @st.cache_data(ttl=3600)
 def fetch_fred_data(series_id, api_key, limit=10, start_date=None, end_date=None):
-    """FRED API에서 데이터 가져오기"""
+    """FRED API에서 데이터 가져오기 - 항상 date 컬럼과 value 컬럼을 가진 DataFrame 반환"""
     if not api_key:
         return None
     
@@ -92,9 +92,11 @@ def fetch_fred_data(series_id, api_key, limit=10, start_date=None, end_date=None
                 df["date"] = pd.to_datetime(df["date"])
                 df["value"] = pd.to_numeric(df["value"], errors="coerce")
                 
-                if start_date and end_date:
-                    df = df[['date', 'value']].dropna()
-                    df = df.set_index('date')
+                # 결측치 제거
+                df = df.dropna(subset=['value'])
+                
+                # 항상 date 컬럼을 유지하고 정렬
+                df = df[['date', 'value']].sort_values('date')
                 
                 return df
     except Exception as e:
@@ -251,7 +253,22 @@ def create_balance_sheet_chart(df, title, series_id):
     if df is None or len(df) == 0:
         return None
     
-    df_sorted = df.sort_values('date')
+    # DataFrame을 복사하여 작업
+    df_work = df.copy()
+    
+    # 인덱스가 DatetimeIndex인 경우 리셋
+    if isinstance(df_work.index, pd.DatetimeIndex):
+        df_work = df_work.reset_index()
+        if 'index' in df_work.columns:
+            df_work = df_work.rename(columns={'index': 'date'})
+    
+    # date 컬럼이 있는지 확인
+    if 'date' not in df_work.columns:
+        # date 컬럼이 없으면 인덱스를 date로 사용
+        df_work['date'] = df_work.index
+    
+    # 정렬
+    df_sorted = df_work.sort_values('date')
     
     fig = go.Figure()
     
@@ -397,6 +414,9 @@ def calculate_spread(spread_info, api_key, start_date, end_date=None):
         if df is None:
             return None, None, None
         
+        # date를 인덱스로 설정
+        df = df.set_index('date')
+        
         df['spread'] = df['value'] * spread_info['multiplier']
         df['ma_4w'] = df['spread'].rolling(window=4, min_periods=1).mean()
         
@@ -415,6 +435,11 @@ def calculate_spread(spread_info, api_key, start_date, end_date=None):
     if df1 is None or df2 is None:
         return None, None, None
     
+    # date를 인덱스로 설정
+    df1 = df1.set_index('date')
+    df2 = df2.set_index('date')
+    
+    # 두 데이터프레임 병합
     df = df1.join(df2, how='outer', rsuffix='_2')
     df.columns = [series1_id, series2_id]
     df = df.ffill().dropna()
@@ -1121,7 +1146,9 @@ def main():
             if len(policy_data) > 0:
                 combined_df = pd.DataFrame()
                 for series_id, df in policy_data.items():
-                    combined_df[series_id] = df['value']
+                    # date를 인덱스로 설정
+                    df_indexed = df.set_index('date')
+                    combined_df[series_id] = df_indexed['value']
                 
                 combined_df = combined_df.ffill().dropna()
                 
