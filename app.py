@@ -1097,7 +1097,7 @@ def main():
                         height=300,
                         margin=dict(l=20, r=20, t=80, b=20),
                         paper_bgcolor="rgba(0,0,0,0)",
-                        font={'color': "white", 'family': "Arial"}
+                        font={'color': "#83858C", 'family': "Arial"}
                     )
                     
                     st.plotly_chart(fig_fg, use_container_width=True)
@@ -1162,7 +1162,7 @@ def main():
                         height=300,
                         margin=dict(l=20, r=20, t=80, b=20),
                         paper_bgcolor="rgba(0,0,0,0)",
-                        font={'color': "white", 'family': "Arial"}
+                        font={'color': "#83858C", 'family': "Arial"}
                     )
                     
                     st.plotly_chart(fig_vix, use_container_width=True)
