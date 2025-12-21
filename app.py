@@ -96,7 +96,7 @@ SERIES_INFO = {
         "liquidity_impact": "증가 시 은행 유동성 ↑"
     },
     "  ㄴ Seasonal Credit": {
-        "id": "WDISCWIN",
+        "id": "WLCFLSECL",
         "highlight": False,
         "category": "자산 (Assets)",
         "description": "할인창구 계절성 신용대출",
@@ -323,7 +323,7 @@ def main():
                 "🔗 WLCFLPCL",
                 "🔗 WLCFLPCL",
                 "🔗 WLCFLSCL",
-                "🔗 WDISCWIN",
+                "🔗 WLCFLSECL",
                 "🔗 WRESBAL",
                 "🔗 WTREGEN",
                 "🔗 RRPONTSYD",
