@@ -528,6 +528,111 @@ def create_components_chart(df_components, series_ids):
     
     return fig
 
+def get_fear_greed_index():
+    """CNN Fear & Greed Index 가져오기 (VIX 기반 대체 계산)"""
+    try:
+        # VIX 데이터 가져오기
+        df_vix = fetch_fred_data("VIXCLS", FRED_API_KEY, limit=1)
+        
+        if df_vix is not None and len(df_vix) > 0:
+            vix_value = df_vix.iloc[0]["value"]
+            
+            # VIX 기반 Fear & Greed 점수 계산 (0-100)
+            # VIX 역수 개념: VIX 낮을수록 탐욕, 높을수록 공포
+            if vix_value <= 12:
+                score = 80 + (12 - vix_value) * 4  # Extreme Greed
+            elif vix_value <= 17:
+                score = 60 + (17 - vix_value) * 4  # Greed
+            elif vix_value <= 25:
+                score = 40 + (25 - vix_value) * 2.5  # Neutral
+            elif vix_value <= 35:
+                score = 20 + (35 - vix_value) * 2  # Fear
+            else:
+                score = max(0, 20 - (vix_value - 35))  # Extreme Fear
+            
+            score = max(0, min(100, score))  # 0-100 범위로 제한
+            
+            # 상태 판단
+            if score >= 75:
+                status = "Extreme Greed"
+                color = "#16a34a"  # 진한 초록
+                emoji = "🤑"
+            elif score >= 55:
+                status = "Greed"
+                color = "#22c55e"  # 초록
+                emoji = "😊"
+            elif score >= 45:
+                status = "Neutral"
+                color = "#eab308"  # 노랑
+                emoji = "😐"
+            elif score >= 25:
+                status = "Fear"
+                color = "#f97316"  # 주황
+                emoji = "😨"
+            else:
+                status = "Extreme Fear"
+                color = "#dc2626"  # 빨강
+                emoji = "😱"
+            
+            return {
+                "score": score,
+                "status": status,
+                "color": color,
+                "emoji": emoji,
+                "vix": vix_value
+            }
+    except Exception as e:
+        st.error(f"Fear & Greed 데이터 로딩 실패: {e}")
+    
+    return None
+
+def get_vix_index():
+    """VIX 지수 가져오기"""
+    try:
+        df_vix = fetch_fred_data("VIXCLS", FRED_API_KEY, limit=1)
+        
+        if df_vix is not None and len(df_vix) > 0:
+            vix_value = df_vix.iloc[0]["value"]
+            
+            # VIX 수준 판단
+            if vix_value < 12:
+                status = "매우 낮음"
+                color = "#16a34a"
+                emoji = "😌"
+                description = "시장 매우 안정"
+            elif vix_value < 20:
+                status = "낮음"
+                color = "#22c55e"
+                emoji = "🙂"
+                description = "시장 안정"
+            elif vix_value < 30:
+                status = "보통"
+                color = "#eab308"
+                emoji = "😐"
+                description = "변동성 증가"
+            elif vix_value < 40:
+                status = "높음"
+                color = "#f97316"
+                emoji = "😰"
+                description = "시장 불안"
+            else:
+                status = "매우 높음"
+                color = "#dc2626"
+                emoji = "🚨"
+                description = "극심한 불안"
+            
+            return {
+                "value": vix_value,
+                "status": status,
+                "color": color,
+                "emoji": emoji,
+                "description": description
+            }
+    except Exception as e:
+        st.error(f"VIX 데이터 로딩 실패: {e}")
+    
+    return None
+
 # ==================== 메인 앱 ====================
 
 def main():
@@ -555,6 +660,59 @@ def main():
     with tab1:
         st.header("Fed Balance Sheet: Weekly Changes (Unit: $M)")
         
+        # 사이드바 설정 (Balance Sheet용)
+        with st.sidebar:
+            st.markdown("### 📅 조회 기간 설정 (Balance Sheet)")
+            
+            bs_date_mode = st.radio(
+                "기간 선택 방식",
+                ["빠른 선택", "직접 입력"],
+                index=0,
+                key="bs_date_mode"
+            )
+            
+            if bs_date_mode == "빠른 선택":
+                bs_period = st.selectbox(
+                    "조회 기간",
+                    ["1개월", "3개월", "6개월", "1년", "2년", "5년"],
+                    index=3,
+                    key="bs_period"
+                )
+                
+                bs_period_map = {
+                    "1개월": 30, "3개월": 90, "6개월": 180, 
+                    "1년": 365, "2년": 730, "5년": 1825
+                }
+                
+                bs_days = bs_period_map[bs_period]
+                bs_start_date = (datetime.now() - timedelta(days=bs_days)).strftime('%Y-%m-%d')
+                bs_end_date = datetime.now().strftime('%Y-%m-%d')
+                
+            else:
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    bs_start_date_input = st.date_input(
+                        "시작 날짜",
+                        value=datetime.now() - timedelta(days=365),
+                        max_value=datetime.now(),
+                        key="bs_start"
+                    )
+                
+                with col2:
+                    bs_end_date_input = st.date_input(
+                        "종료 날짜",
+                        value=datetime.now(),
+                        max_value=datetime.now(),
+                        key="bs_end"
+                    )
+                
+                bs_start_date = bs_start_date_input.strftime('%Y-%m-%d')
+                bs_end_date = bs_end_date_input.strftime('%Y-%m-%d')
+        
+        # 조회 기간 표시
+        st.info(f"📅 **조회 기간**: {bs_start_date} ~ {bs_end_date}")
+        
         with st.spinner("데이터를 불러오는 중..."):
             data_list = []
             chart_data = {}
@@ -571,7 +729,9 @@ def main():
                 df = fetch_fred_data(series_id, FRED_API_KEY, limit=10)
                 
                 if show_chart:
-                    df_chart = fetch_fred_data(series_id, FRED_API_KEY, limit=52)
+                    # 차트용 데이터는 설정된 조회기간 사용
+                    df_chart = fetch_fred_data(series_id, FRED_API_KEY, limit=None, 
+                                               start_date=bs_start_date, end_date=bs_end_date)
                     chart_data[name] = {"df": df_chart, "series_id": series_id}
                 
                 if df is not None and len(df) >= 2:
@@ -669,7 +829,7 @@ def main():
             
             # 차트 섹션
             st.markdown("---")
-            st.markdown("### 📈 주요 항목 추이 (최근 52주)")
+            st.markdown(f"### 📈 주요 항목 추이 ({bs_start_date} ~ {bs_end_date})")
             
             chart_names = list(chart_data.keys())
             for i in range(0, len(chart_names), 2):
@@ -771,6 +931,144 @@ def main():
         
         # 조회 기간 표시
         st.info(f"📅 **조회 기간**: {start_date} ~ {end_date}")
+        
+        # Fear & Greed 및 VIX 지수
+        st.markdown("---")
+        st.subheader("🎭 시장 심리 지표")
+        
+        indicator_cols = st.columns(2)
+        
+        with indicator_cols[0]:
+            with st.spinner('Fear & Greed 지수 로딩 중...'):
+                fg_data = get_fear_greed_index()
+                
+                if fg_data:
+                    # Fear & Greed 게이지 차트
+                    fig_fg = go.Figure(go.Indicator(
+                        mode="gauge+number+delta",
+                        value=fg_data["score"],
+                        domain={'x': [0, 1], 'y': [0, 1]},
+                        title={'text': f"{fg_data['emoji']} Fear & Greed Index", 'font': {'size': 24}},
+                        number={'suffix': "", 'font': {'size': 40}},
+                        gauge={
+                            'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "white"},
+                            'bar': {'color': fg_data["color"], 'thickness': 0.75},
+                            'bgcolor': "white",
+                            'borderwidth': 2,
+                            'bordercolor': "gray",
+                            'steps': [
+                                {'range': [0, 25], 'color': '#fecaca'},      # Extreme Fear (연한 빨강)
+                                {'range': [25, 45], 'color': '#fed7aa'},     # Fear (연한 주황)
+                                {'range': [45, 55], 'color': '#fef08a'},     # Neutral (연한 노랑)
+                                {'range': [55, 75], 'color': '#bbf7d0'},     # Greed (연한 초록)
+                                {'range': [75, 100], 'color': '#86efac'}     # Extreme Greed (초록)
+                            ],
+                            'threshold': {
+                                'line': {'color': "black", 'width': 4},
+                                'thickness': 0.75,
+                                'value': fg_data["score"]
+                            }
+                        }
+                    ))
+                    
+                    fig_fg.update_layout(
+                        height=300,
+                        margin=dict(l=20, r=20, t=80, b=20),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        font={'color': "white", 'family': "Arial"}
+                    )
+                    
+                    st.plotly_chart(fig_fg, use_container_width=True)
+                    
+                    # 상태 표시
+                    st.markdown(f"""
+                    <div style='text-align: center; padding: 15px; background-color: {fg_data['color']}20; 
+                                border-radius: 10px; border: 2px solid {fg_data['color']};'>
+                        <h2 style='color: {fg_data['color']}; margin: 0;'>{fg_data['emoji']} {fg_data['status']}</h2>
+                        <p style='color: white; margin: 5px 0 0 0; font-size: 14px;'>
+                            Score: {fg_data['score']:.1f}/100 | VIX: {fg_data['vix']:.2f}
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # 범위 설명
+                    st.caption("""
+                    **해석 가이드:**
+                    - 0-25: Extreme Fear 😱 (공포 극대)
+                    - 25-45: Fear 😨 (공포)
+                    - 45-55: Neutral 😐 (중립)
+                    - 55-75: Greed 😊 (탐욕)
+                    - 75-100: Extreme Greed 🤑 (탐욕 극대)
+                    """)
+                else:
+                    st.error("Fear & Greed 데이터를 불러올 수 없습니다.")
+        
+        with indicator_cols[1]:
+            with st.spinner('VIX 지수 로딩 중...'):
+                vix_data = get_vix_index()
+                
+                if vix_data:
+                    # VIX 게이지 차트
+                    fig_vix = go.Figure(go.Indicator(
+                        mode="gauge+number",
+                        value=vix_data["value"],
+                        domain={'x': [0, 1], 'y': [0, 1]},
+                        title={'text': f"{vix_data['emoji']} VIX Index", 'font': {'size': 24}},
+                        number={'font': {'size': 40}},
+                        gauge={
+                            'axis': {'range': [0, 80], 'tickwidth': 1, 'tickcolor': "white"},
+                            'bar': {'color': vix_data["color"], 'thickness': 0.75},
+                            'bgcolor': "white",
+                            'borderwidth': 2,
+                            'bordercolor': "gray",
+                            'steps': [
+                                {'range': [0, 12], 'color': '#86efac'},      # 매우 낮음 (초록)
+                                {'range': [12, 20], 'color': '#bbf7d0'},     # 낮음 (연한 초록)
+                                {'range': [20, 30], 'color': '#fef08a'},     # 보통 (노랑)
+                                {'range': [30, 40], 'color': '#fed7aa'},     # 높음 (주황)
+                                {'range': [40, 80], 'color': '#fecaca'}      # 매우 높음 (빨강)
+                            ],
+                            'threshold': {
+                                'line': {'color': "black", 'width': 4},
+                                'thickness': 0.75,
+                                'value': vix_data["value"]
+                            }
+                        }
+                    ))
+                    
+                    fig_vix.update_layout(
+                        height=300,
+                        margin=dict(l=20, r=20, t=80, b=20),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        font={'color': "white", 'family': "Arial"}
+                    )
+                    
+                    st.plotly_chart(fig_vix, use_container_width=True)
+                    
+                    # 상태 표시
+                    st.markdown(f"""
+                    <div style='text-align: center; padding: 15px; background-color: {vix_data['color']}20; 
+                                border-radius: 10px; border: 2px solid {vix_data['color']};'>
+                        <h2 style='color: {vix_data['color']}; margin: 0;'>{vix_data['emoji']} {vix_data['status']}</h2>
+                        <p style='color: white; margin: 5px 0 0 0; font-size: 14px;'>
+                            {vix_data['description']}
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # 범위 설명
+                    st.caption("""
+                    **VIX 수준:**
+                    - <12: 매우 낮음 😌 (안정)
+                    - 12-20: 낮음 🙂 (보통)
+                    - 20-30: 보통 😐 (변동성)
+                    - 30-40: 높음 😰 (불안)
+                    - >40: 매우 높음 🚨 (공포)
+                    """)
+                else:
+                    st.error("VIX 데이터를 불러올 수 없습니다.")
+        
+        st.markdown("---")
         
         # 현재 상태 요약
         st.subheader("📍 현재 상태")
