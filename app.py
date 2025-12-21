@@ -554,60 +554,103 @@ def create_components_chart(df_components, series_ids):
     return fig
 
 def get_fear_greed_index():
-    """CNN Fear & Greed Index 가져오기 (VIX 기반 대체 계산)"""
+    """CNN Fear & Greed Index 가져오기"""
     try:
-        # VIX 데이터 가져오기
-        df_vix = fetch_fred_data("VIXCLS", FRED_API_KEY, limit=1)
+        # CNN Fear & Greed Index API
+        url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+        response = requests.get(url, timeout=10)
         
-        if df_vix is not None and len(df_vix) > 0:
-            vix_value = df_vix.iloc[0]["value"]
+        if response.status_code == 200:
+            data = response.json()
             
-            # VIX 기반 Fear & Greed 점수 계산 (0-100)
-            # VIX 역수 개념: VIX 낮을수록 탐욕, 높을수록 공포
-            if vix_value <= 12:
-                score = 80 + (12 - vix_value) * 4  # Extreme Greed
-            elif vix_value <= 17:
-                score = 60 + (17 - vix_value) * 4  # Greed
-            elif vix_value <= 25:
-                score = 40 + (25 - vix_value) * 2.5  # Neutral
-            elif vix_value <= 35:
-                score = 20 + (35 - vix_value) * 2  # Fear
-            else:
-                score = max(0, 20 - (vix_value - 35))  # Extreme Fear
-            
-            score = max(0, min(100, score))  # 0-100 범위로 제한
-            
-            # 상태 판단
-            if score >= 75:
-                status = "Extreme Greed"
-                color = "#16a34a"  # 진한 초록
-                emoji = "🤑"
-            elif score >= 55:
-                status = "Greed"
-                color = "#22c55e"  # 초록
-                emoji = "😊"
-            elif score >= 45:
-                status = "Neutral"
-                color = "#eab308"  # 노랑
-                emoji = "😐"
-            elif score >= 25:
-                status = "Fear"
-                color = "#f97316"  # 주황
-                emoji = "😨"
-            else:
-                status = "Extreme Fear"
-                color = "#dc2626"  # 빨강
-                emoji = "😱"
-            
-            return {
-                "score": score,
-                "status": status,
-                "color": color,
-                "emoji": emoji,
-                "vix": vix_value
-            }
+            # 현재 점수 가져오기
+            if 'fear_and_greed' in data:
+                score = float(data['fear_and_greed']['score'])
+                rating = data['fear_and_greed']['rating']
+                
+                # 상태에 따른 색상 및 이모지 설정
+                if score >= 75:
+                    status = "Extreme Greed"
+                    color = "#16a34a"  # 진한 초록
+                    emoji = "🤑"
+                elif score >= 55:
+                    status = "Greed"
+                    color = "#22c55e"  # 초록
+                    emoji = "😊"
+                elif score >= 45:
+                    status = "Neutral"
+                    color = "#eab308"  # 노랑
+                    emoji = "😐"
+                elif score >= 25:
+                    status = "Fear"
+                    color = "#f97316"  # 주황
+                    emoji = "😨"
+                else:
+                    status = "Extreme Fear"
+                    color = "#dc2626"  # 빨강
+                    emoji = "😱"
+                
+                return {
+                    "score": score,
+                    "status": status,
+                    "rating": rating,
+                    "color": color,
+                    "emoji": emoji
+                }
     except Exception as e:
         st.error(f"Fear & Greed 데이터 로딩 실패: {e}")
+        
+        # 실패 시 VIX 기반 대체 계산
+        try:
+            df_vix = fetch_fred_data("VIXCLS", FRED_API_KEY, limit=1)
+            
+            if df_vix is not None and len(df_vix) > 0:
+                vix_value = df_vix.iloc[0]["value"]
+                
+                # VIX 기반 Fear & Greed 점수 계산 (0-100)
+                if vix_value <= 12:
+                    score = 80 + (12 - vix_value) * 4
+                elif vix_value <= 17:
+                    score = 60 + (17 - vix_value) * 4
+                elif vix_value <= 25:
+                    score = 40 + (25 - vix_value) * 2.5
+                elif vix_value <= 35:
+                    score = 20 + (35 - vix_value) * 2
+                else:
+                    score = max(0, 20 - (vix_value - 35))
+                
+                score = max(0, min(100, score))
+                
+                if score >= 75:
+                    status = "Extreme Greed"
+                    color = "#16a34a"
+                    emoji = "🤑"
+                elif score >= 55:
+                    status = "Greed"
+                    color = "#22c55e"
+                    emoji = "😊"
+                elif score >= 45:
+                    status = "Neutral"
+                    color = "#eab308"
+                    emoji = "😐"
+                elif score >= 25:
+                    status = "Fear"
+                    color = "#f97316"
+                    emoji = "😨"
+                else:
+                    status = "Extreme Fear"
+                    color = "#dc2626"
+                    emoji = "😱"
+                
+                return {
+                    "score": score,
+                    "status": status,
+                    "rating": f"VIX-based ({vix_value:.2f})",
+                    "color": color,
+                    "emoji": emoji
+                }
+        except:
+            pass
     
     return None
 
@@ -617,7 +660,7 @@ def get_vix_index():
         df_vix = fetch_fred_data("VIXCLS", FRED_API_KEY, limit=1)
         
         if df_vix is not None and len(df_vix) > 0:
-            vix_value = df_vix.iloc[0]["value"]
+            vix_value = float(df_vix.iloc[0]["value"])
             
             # VIX 수준 판단
             if vix_value < 12:
@@ -973,10 +1016,10 @@ def main():
                         mode="gauge+number+delta",
                         value=fg_data["score"],
                         domain={'x': [0, 1], 'y': [0, 1]},
-                        title={'text': f"{fg_data['emoji']} Fear & Greed Index", 'font': {'size': 24}},
-                        number={'suffix': "", 'font': {'size': 40}},
+                        title={'text': f"{fg_data['emoji']} Fear & Greed Index", 'font': {'size': 24, 'color': 'white'}},
+                        number={'suffix': "", 'font': {'size': 50, 'color': 'black', 'family': 'Arial Black'}},
                         gauge={
-                            'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "white"},
+                            'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "black"},
                             'bar': {'color': fg_data["color"], 'thickness': 0.75},
                             'bgcolor': "white",
                             'borderwidth': 2,
@@ -1011,7 +1054,7 @@ def main():
                                 border-radius: 10px; border: 2px solid {fg_data['color']};'>
                         <h2 style='color: {fg_data['color']}; margin: 0;'>{fg_data['emoji']} {fg_data['status']}</h2>
                         <p style='color: white; margin: 5px 0 0 0; font-size: 14px;'>
-                            Score: {fg_data['score']:.1f}/100 | VIX: {fg_data['vix']:.2f}
+                            Score: <span style='color: black; background-color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold;'>{fg_data['score']:.1f}/100</span>
                         </p>
                     </div>
                     """, unsafe_allow_html=True)
@@ -1038,10 +1081,10 @@ def main():
                         mode="gauge+number",
                         value=vix_data["value"],
                         domain={'x': [0, 1], 'y': [0, 1]},
-                        title={'text': f"{vix_data['emoji']} VIX Index", 'font': {'size': 24}},
-                        number={'font': {'size': 40}},
+                        title={'text': f"{vix_data['emoji']} VIX Index", 'font': {'size': 24, 'color': 'white'}},
+                        number={'font': {'size': 50, 'color': 'black', 'family': 'Arial Black'}},
                         gauge={
-                            'axis': {'range': [0, 80], 'tickwidth': 1, 'tickcolor': "white"},
+                            'axis': {'range': [0, 80], 'tickwidth': 1, 'tickcolor': "black"},
                             'bar': {'color': vix_data["color"], 'thickness': 0.75},
                             'bgcolor': "white",
                             'borderwidth': 2,
@@ -1076,7 +1119,7 @@ def main():
                                 border-radius: 10px; border: 2px solid {vix_data['color']};'>
                         <h2 style='color: {vix_data['color']}; margin: 0;'>{vix_data['emoji']} {vix_data['status']}</h2>
                         <p style='color: white; margin: 5px 0 0 0; font-size: 14px;'>
-                            {vix_data['description']}
+                            VIX: <span style='color: black; background-color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold;'>{vix_data['value']:.2f}</span> | {vix_data['description']}
                         </p>
                     </div>
                     """, unsafe_allow_html=True)
