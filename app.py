@@ -3,10 +3,11 @@ import pandas as pd
 import requests
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # 페이지 설정
 st.set_page_config(
-    page_title="Fed Balance Sheet",
+    page_title="Fed 모니터링 대시보드",
     page_icon="📊",
     layout="wide"
 )
@@ -49,10 +50,60 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# FRED API 키 (GitHub Secrets에서 가져오기)
-FRED_API_KEY = st.secrets.get("FRED_API_KEY", "")
+# FRED API 키
+try:
+    FRED_API_KEY = st.secrets.get("FRED_API_KEY", "")
+except:
+    FRED_API_KEY = ""
 
-# FRED 데이터 시리즈 정보 (ID, 링크, 하이라이트 여부, 분류, 설명, 유동성 영향, 순서)
+# ==================== 공통 함수 ====================
+
+@st.cache_data(ttl=3600)
+def fetch_fred_data(series_id, api_key, limit=10, start_date=None, end_date=None):
+    """FRED API에서 데이터 가져오기"""
+    if not api_key:
+        return None
+    
+    url = f"https://api.stlouisfed.org/fred/series/observations"
+    
+    if start_date and end_date:
+        params = {
+            "series_id": series_id,
+            "api_key": api_key,
+            "file_type": "json",
+            "observation_start": start_date,
+            "observation_end": end_date
+        }
+    else:
+        params = {
+            "series_id": series_id,
+            "api_key": api_key,
+            "file_type": "json",
+            "sort_order": "desc",
+            "limit": limit
+        }
+    
+    try:
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            if "observations" in data:
+                df = pd.DataFrame(data["observations"])
+                df["date"] = pd.to_datetime(df["date"])
+                df["value"] = pd.to_numeric(df["value"], errors="coerce")
+                
+                if start_date and end_date:
+                    df = df[['date', 'value']].dropna()
+                    df = df.set_index('date')
+                
+                return df
+    except Exception as e:
+        st.error(f"데이터 가져오기 오류: {e}")
+    
+    return None
+
+# ==================== 대차대조표 관련 ====================
+
 SERIES_INFO = {
     "총자산 (Total Assets)": {
         "id": "WALCL",
@@ -173,35 +224,6 @@ SERIES_INFO = {
     }
 }
 
-@st.cache_data(ttl=3600)
-def fetch_fred_data(series_id, api_key, limit=10):
-    """FRED API에서 데이터 가져오기"""
-    if not api_key:
-        return None
-    
-    url = f"https://api.stlouisfed.org/fred/series/observations"
-    params = {
-        "series_id": series_id,
-        "api_key": api_key,
-        "file_type": "json",
-        "sort_order": "desc",
-        "limit": limit
-    }
-    
-    try:
-        response = requests.get(url, params=params)
-        if response.status_code == 200:
-            data = response.json()
-            if "observations" in data:
-                df = pd.DataFrame(data["observations"])
-                df["date"] = pd.to_datetime(df["date"])
-                df["value"] = pd.to_numeric(df["value"], errors="coerce")
-                return df
-    except Exception as e:
-        st.error(f"데이터 가져오기 오류: {e}")
-    
-    return None
-
 def format_number(value):
     """숫자를 $M 단위로 포맷"""
     if pd.isna(value):
@@ -224,12 +246,11 @@ def get_fred_link(series_id):
     """FRED 시리즈 링크 생성"""
     return f"https://fred.stlouisfed.org/series/{series_id}"
 
-def create_chart(df, title, series_id):
-    """Plotly 차트 생성"""
+def create_balance_sheet_chart(df, title, series_id):
+    """대차대조표 차트 생성"""
     if df is None or len(df) == 0:
         return None
     
-    # 데이터를 날짜 순으로 정렬
     df_sorted = df.sort_values('date')
     
     fig = go.Figure()
@@ -268,345 +289,671 @@ def create_chart(df, title, series_id):
     
     return fig
 
-# 메인 앱
+# ==================== 금리 스프레드 관련 ====================
+
+SPREADS = {
+    "EFFR-IORB": {
+        "name": "EFFR - IORB",
+        "series": ["EFFR", "IORB"],
+        "multiplier": 1000,
+        "threshold_min": -10,
+        "threshold_max": 10,
+        "description": "초단기 자금시장 유동성 지표",
+        "normal_range": "-10 ~ +10bp",
+        "interpretation": "양수: 준비금 부족/유동성 타이트 / 음수: 초과 준비금/유동성 풍부",
+        "signals": {
+            "tight": (10, float('inf'), "⚠️ 초단기 유동성 타이트 - 준비금 부족"),
+            "normal": (-10, 10, "✅ 정상 범위 (정책 운용 변동 포함)"),
+            "loose": (float('-inf'), -10, "💧 초과 준비금 (유동성 풍부)")
+        }
+    },
+    "SOFR-RRP": {
+        "name": "SOFR - RRP",
+        "series": ["SOFR", "RRPONTSYAWARD"],
+        "multiplier": 1000,
+        "threshold_min": 0,
+        "threshold_max": 10,
+        "description": "레포 시장 긴장도 지표",
+        "normal_range": "0 ~ +10bp",
+        "interpretation": "양수: 정상 / >10bp: 담보 부족/레포시장 긴장 / 음수: 비정상",
+        "signals": {
+            "stress": (10, float('inf'), "⚠️ 레포시장 스트레스 - 담보 부족"),
+            "normal": (0, 10, "✅ 보통 변동"),
+            "abnormal": (float('-inf'), 0, "🔍 비정상 - 데이터/정책 확인 필요")
+        }
+    },
+    "DGS3MO-EFFR": {
+        "name": "3M Treasury - EFFR",
+        "series": ["DGS3MO", "EFFR"],
+        "multiplier": 100,
+        "threshold_min": -20,
+        "threshold_max": 20,
+        "description": "단기 금리 기대 및 정책 방향 신호",
+        "normal_range": "-20 ~ +20bp",
+        "interpretation": "<-20bp: 금리 인하 예상 / 중립: 균형 / >20bp: 금리 인상 기대",
+        "signals": {
+            "easing": (float('-inf'), -20, "🔽 금리 인하 예상 (완화 기대)"),
+            "neutral": (-20, 20, "✅ 중립 (명확한 기대 신호 없음)"),
+            "tightening": (20, float('inf'), "🔼 금리 인상 기대 (긴축 신호)")
+        }
+    },
+    "DGS10-DGS2": {
+        "name": "10Y - 2Y Yield Curve",
+        "series": ["DGS10", "DGS2"],
+        "multiplier": 100,
+        "threshold_min": 0,
+        "threshold_max": 50,
+        "description": "경기 사이클 및 경기침체 예측 지표 (2s10s)",
+        "normal_range": "0 ~ +50bp",
+        "interpretation": "음수(역전): 경기침체 신호 / 0~50bp: 정상 / >50bp: 가파른 성장 기대",
+        "signals": {
+            "severe_inversion": (float('-inf'), -50, "🚨 강한 침체 리스크 (심층 분석 권장)"),
+            "mild_inversion": (-50, 0, "⚠️ 곡선 역전 - 경기침체 경고"),
+            "normal": (0, 50, "✅ 정상 (완만한 우상향)"),
+            "steep": (50, float('inf'), "📈 가파른 곡선 (강한 성장/인플레 기대)")
+        }
+    },
+    "DGS10-DGS3MO": {
+        "name": "10Y - 3M Yield Curve",
+        "series": ["DGS10", "DGS3MO"],
+        "multiplier": 100,
+        "threshold_min": 0,
+        "threshold_max": 100,
+        "description": "가장 강력한 경기침체 선행 지표",
+        "normal_range": "0 ~ +100bp",
+        "interpretation": "<-50bp: 매우 강한 침체 신호 / 0~100bp: 정상 / >100bp: 장단기 프리미엄",
+        "signals": {
+            "strong_recession": (float('-inf'), -50, "🚨 매우 강한 침체 선행 신호"),
+            "recession_warning": (-50, 0, "⚠️ 침체 우려 레벨"),
+            "normal": (0, 100, "✅ 정상-완만"),
+            "steep": (100, float('inf'), "📈 장단기 프리미엄 (성장/인플레 기대)")
+        }
+    },
+    "STLFSI4": {
+        "name": "금융 스트레스 인덱스",
+        "series": ["STLFSI4"],
+        "multiplier": 1,
+        "threshold_min": -0.5,
+        "threshold_max": 0.5,
+        "description": "세인트루이스 연준 금융 스트레스 지표",
+        "normal_range": "-0.5 ~ +0.5",
+        "interpretation": "0 기준: 평균 스트레스 / 양수: 스트레스 증가 / 음수: 스트레스 감소",
+        "signals": {
+            "severe_stress": (1.5, float('inf'), "🚨 심각한 금융 스트레스"),
+            "elevated_stress": (0.5, 1.5, "⚠️ 높은 스트레스"),
+            "normal": (-0.5, 0.5, "✅ 정상 범위"),
+            "low_stress": (float('-inf'), -0.5, "💚 낮은 스트레스")
+        },
+        "is_single_series": True
+    }
+}
+
+def calculate_spread(spread_info, api_key, start_date, end_date=None):
+    """스프레드 계산"""
+    if spread_info.get('is_single_series', False):
+        series_id = spread_info['series'][0]
+        df = fetch_fred_data(series_id, api_key, limit=None, start_date=start_date, end_date=end_date)
+        
+        if df is None:
+            return None, None, None
+        
+        df['spread'] = df['value'] * spread_info['multiplier']
+        df['ma_4w'] = df['spread'].rolling(window=4, min_periods=1).mean()
+        
+        latest_value = df['spread'].iloc[-1] if len(df) > 0 else None
+        
+        df_components = df[['value']].copy()
+        df_components.columns = [series_id]
+        
+        return df, latest_value, df_components
+    
+    series1_id, series2_id = spread_info['series']
+    
+    df1 = fetch_fred_data(series1_id, api_key, limit=None, start_date=start_date, end_date=end_date)
+    df2 = fetch_fred_data(series2_id, api_key, limit=None, start_date=start_date, end_date=end_date)
+    
+    if df1 is None or df2 is None:
+        return None, None, None
+    
+    df = df1.join(df2, how='outer', rsuffix='_2')
+    df.columns = [series1_id, series2_id]
+    df = df.ffill().dropna()
+    
+    df['spread'] = (df[series1_id] - df[series2_id]) * spread_info['multiplier']
+    
+    latest_value = df['spread'].iloc[-1] if len(df) > 0 else None
+    
+    return df, latest_value, df[[series1_id, series2_id]]
+
+def get_signal_status(value, signals):
+    """신호 기반 상태 판단"""
+    for signal_name, (min_val, max_val, message) in signals.items():
+        if min_val <= value < max_val:
+            return message
+    return "📊 데이터 확인 필요"
+
+def create_spread_chart(df, spread_name, spread_info, latest_value):
+    """스프레드 차트 생성"""
+    fig = go.Figure()
+    
+    if spread_info.get('is_single_series', False):
+        fig.add_trace(go.Scatter(
+            x=df.index,
+            y=df['spread'],
+            mode='lines',
+            name='STLFSI4',
+            line=dict(color='#2E86DE', width=2)
+        ))
+        
+        if 'ma_4w' in df.columns:
+            fig.add_trace(go.Scatter(
+                x=df.index,
+                y=df['ma_4w'],
+                mode='lines',
+                name='4주 이동평균',
+                line=dict(color='#FF6B6B', width=2, dash='dash')
+            ))
+        
+        fig.add_hline(
+            y=0,
+            line_dash="dash",
+            line_color="gray",
+            opacity=0.5,
+            annotation_text="평균 수준"
+        )
+    else:
+        fig.add_trace(go.Scatter(
+            x=df.index,
+            y=df['spread'],
+            mode='lines',
+            name='Spread',
+            line=dict(color='#2E86DE', width=2)
+        ))
+    
+    if 'signals' in spread_info:
+        colors_map = {
+            'normal': 'green', 'neutral': 'green', 'mild_inversion': 'orange',
+            'recession_warning': 'orange', 'easing': 'lightblue', 'tightening': 'pink',
+            'stress': 'red', 'severe_inversion': 'red', 'strong_recession': 'red',
+            'tight': 'orange', 'abnormal': 'gray', 'loose': 'lightgreen',
+            'steep': 'lightblue', 'severe_stress': 'red', 'elevated_stress': 'orange',
+            'low_stress': 'lightgreen'
+        }
+        
+        for signal_name, (min_val, max_val, message) in spread_info['signals'].items():
+            if min_val != float('-inf') and max_val != float('inf'):
+                color = colors_map.get(signal_name, 'gray')
+                fig.add_hrect(
+                    y0=min_val, y1=max_val, fillcolor=color, opacity=0.1,
+                    line_width=0,
+                    annotation_text=message.split(' - ')[0] if ' - ' in message else message,
+                    annotation_position="left"
+                )
+    
+    y_axis_title = "Index Value" if spread_info.get('is_single_series', False) else "Basis Points (bp)"
+    
+    fig.update_layout(
+        title=f"{spread_name} ({spread_info['normal_range']})",
+        xaxis_title="날짜",
+        yaxis_title=y_axis_title,
+        hovermode='x unified',
+        height=400,
+        showlegend=True
+    )
+    
+    return fig
+
+def create_components_chart(df_components, series_ids):
+    """구성 요소 차트 생성"""
+    fig = go.Figure()
+    
+    colors = ['#EE5A6F', '#4ECDC4']
+    for i, series in enumerate(series_ids):
+        fig.add_trace(go.Scatter(
+            x=df_components.index,
+            y=df_components[series],
+            mode='lines',
+            name=series,
+            line=dict(color=colors[i], width=2)
+        ))
+    
+    fig.update_layout(
+        title="구성 요소",
+        xaxis_title="날짜",
+        yaxis_title="Rate (%)",
+        hovermode='x unified',
+        height=300,
+        showlegend=True
+    )
+    
+    return fig
+
+# ==================== 메인 앱 ====================
+
 def main():
-    st.title("📊 Fed Balance Sheet: Weekly Changes (Unit: $M 주)")
+    st.title("📊 Fed 모니터링 통합 대시보드")
     st.caption(f"마지막 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     # API 키 확인
     if not FRED_API_KEY:
-        st.warning("⚠️ FRED API 키가 설정되지 않았습니다. GitHub Secrets에 FRED_API_KEY를 추가해주세요.")
-        st.info("FRED API 키는 https://fred.stlouisfed.org/docs/api/api_key.html 에서 무료로 발급받을 수 있습니다.")
+        st.warning("⚠️ FRED API 키가 설정되지 않았습니다. GitHub Secrets 또는 Streamlit Secrets에 FRED_API_KEY를 추가해주세요.")
+        st.info("""
+        **FRED API 키 발급:**
+        https://fred.stlouisfed.org/docs/api/api_key.html 에서 무료로 발급받을 수 있습니다.
         
-        # 샘플 데이터 표시
-        st.subheader("샘플 데이터 (예시)")
-        
-        sample_data = {
-            "분류": [
-                "자산",
-                "자산",
-                "자산",
-                "자산",
-                "자산",
-                "자산",
-                "자산",
-                "부채",
-                "부채",
-                "부채",
-                "부채",
-                "부채",
-                "부채"
-            ],
-            "항목": [
-                "총자산 (Total Assets)",
-                "연준 보유 증권 (Securities Held)",
-                "SRF (상설레포)",
-                "대출 (Loans)",
-                "  ㄴ Primary Credit",
-                "  ㄴ Secondary Credit",
-                "  ㄴ Seasonal Credit",
-                "지급준비금 (Reserve Balances)",
-                "TGA (재무부 일반계정)",
-                "RRP (역레포)",
-                "MMF (Money Market Funds)",
-                "Retail MMF",
-                "총부채 (Total Liabilities)"
-            ],
-            "설명": [
-                "연준의 전체 자산 규모",
-                "연준이 보유한 국채 및 MBS",
-                "은행에 제공하는 단기 대출",
-                "연준의 금융기관 대출",
-                "할인창구 1차 신용대출",
-                "할인창구 2차 신용대출",
-                "할인창구 계절성 신용대출",
-                "은행들이 연준에 예치한 자금",
-                "미 재무부의 연준 예금",
-                "MMF 등의 초단기 자금 흡수",
-                "머니마켓펀드 총 자산",
-                "개인투자자용 머니마켓펀드",
-                "연준의 전체 부채 규모"
-            ],
-            "현재 값": [
-                "6,535,781",
-                "6,244,751",
-                "1",
-                "7,915",
-                "7,500",
-                "200",
-                "215",
-                "2,878,165",
-                "908,523",
-                "332,669",
-                "6,489,869",
-                "2,100,000",
-                "6,535,781"
-            ],
-            "이전 값": [
-                "6,552,419",
-                "6,247,237",
-                "14,000",
-                "7,876",
-                "7,400",
-                "250",
-                "226",
-                "2,897,987",
-                "899,678",
-                "332,399",
-                "6,506,556",
-                "2,095,000",
-                "6,552,419"
-            ],
-            "변화": [
-                "▼ 16,638",
-                "▼ 2,486",
-                "▼ 13,999",
-                "▲ 39",
-                "▲ 100",
-                "▼ 50",
-                "▼ 11",
-                "▼ 19,822",
-                "▲ 8,845",
-                "▲ 270",
-                "▼ 16,687",
-                "▲ 5,000",
-                "▼ 16,638"
-            ],
-            "유동성 영향": [
-                "증가 시 시장 유동성 ↑",
-                "증가 시 시장 유동성 ↑",
-                "증가 시 은행 유동성 ↑",
-                "증가 시 시장 유동성 ↑",
-                "증가 시 은행 유동성 ↑",
-                "증가 시 은행 유동성 ↑",
-                "증가 시 은행 유동성 ↑",
-                "증가 시 은행 유동성 ↑",
-                "증가 시 시장 유동성 ↓",
-                "증가 시 시장 유동성 ↓",
-                "증가 시 현금 보유 선호 ↑",
-                "증가 시 현금 보유 선호 ↑",
-                "구조 변화가 유동성에 영향"
-            ],
-            "출처": [
-                "🔗 WALCL",
-                "🔗 WSHOSHO",
-                "🔗 RPONTSYD",
-                "🔗 WLCFLPCL",
-                "🔗 WLCFLPCL",
-                "🔗 WLCFLSCL",
-                "🔗 WLCFLSECL",
-                "🔗 WRESBAL",
-                "🔗 WTREGEN",
-                "🔗 RRPONTSYD",
-                "🔗 MMMFFAQ027S",
-                "🔗 WRMFNS",
-                "🔗 WALCL"
-            ]
-        }
-        
-        df_sample = pd.DataFrame(sample_data)
-        
-        st.dataframe(
-            df_sample,
-            hide_index=True,
-            use_container_width=True,
-            height=550
-        )
-        
-        st.info("💡 위 데이터는 예시입니다. FRED API 키를 설정하면 실시간 데이터를 확인할 수 있습니다.")
+        **Streamlit Cloud Secrets 설정:**
+        1. Streamlit Cloud 대시보드에서 앱 선택
+        2. Settings → Secrets 메뉴 클릭
+        3. `FRED_API_KEY = "your_api_key_here"` 형식으로 입력
+        """)
         return
     
-    # 실제 데이터 가져오기
-    with st.spinner("데이터를 불러오는 중..."):
-        data_list = []
-        chart_data = {}
+    # 메인 탭 생성
+    tab1, tab2 = st.tabs(["💰 Fed Balance Sheet", "📈 금리 스프레드"])
+    
+    # ==================== Tab 1: Fed Balance Sheet ====================
+    with tab1:
+        st.header("Fed Balance Sheet: Weekly Changes (Unit: $M)")
         
-        for name, info in SERIES_INFO.items():
-            series_id = info["id"]
-            highlight = info["highlight"]
-            category = info["category"]
-            description = info["description"]
-            liquidity_impact = info["liquidity_impact"]
-            order = info["order"]
-            show_chart = info.get("show_chart", False)
+        with st.spinner("데이터를 불러오는 중..."):
+            data_list = []
+            chart_data = {}
             
-            # 테이블용 최근 2개 데이터
-            df = fetch_fred_data(series_id, FRED_API_KEY, limit=10)
-            
-            # 차트용 더 많은 데이터 (최근 52주 = 1년)
-            if show_chart:
-                df_chart = fetch_fred_data(series_id, FRED_API_KEY, limit=52)
-                chart_data[name] = {"df": df_chart, "series_id": series_id}
-            
-            if df is not None and len(df) >= 2:
-                current_value = df.iloc[0]["value"]
-                previous_value = df.iloc[1]["value"]
-                change = current_value - previous_value
-                date = df.iloc[0]["date"]
+            for name, info in SERIES_INFO.items():
+                series_id = info["id"]
+                highlight = info["highlight"]
+                category = info["category"]
+                description = info["description"]
+                liquidity_impact = info["liquidity_impact"]
+                order = info["order"]
+                show_chart = info.get("show_chart", False)
                 
-                data_list.append({
-                    "분류": category,
-                    "항목": name,
-                    "설명": description,
-                    "현재 값": format_number(current_value),
-                    "이전 값": format_number(previous_value),
-                    "변화": format_change(change),
-                    "유동성 영향": liquidity_impact,
-                    "출처": f'<a href="{get_fred_link(series_id)}" target="_blank">🔗 {series_id}</a>',
-                    "하이라이트": highlight,
-                    "변화_수치": change,
-                    "순서": order
-                })
+                df = fetch_fred_data(series_id, FRED_API_KEY, limit=10)
+                
+                if show_chart:
+                    df_chart = fetch_fred_data(series_id, FRED_API_KEY, limit=52)
+                    chart_data[name] = {"df": df_chart, "series_id": series_id}
+                
+                if df is not None and len(df) >= 2:
+                    current_value = df.iloc[0]["value"]
+                    previous_value = df.iloc[1]["value"]
+                    change = current_value - previous_value
+                    
+                    data_list.append({
+                        "분류": category,
+                        "항목": name,
+                        "설명": description,
+                        "현재 값": format_number(current_value),
+                        "이전 값": format_number(previous_value),
+                        "변화": format_change(change),
+                        "유동성 영향": liquidity_impact,
+                        "출처": f'<a href="{get_fred_link(series_id)}" target="_blank">🔗 {series_id}</a>',
+                        "하이라이트": highlight,
+                        "변화_수치": change,
+                        "순서": order
+                    })
+                else:
+                    data_list.append({
+                        "분류": category,
+                        "항목": name,
+                        "설명": description,
+                        "현재 값": "N/A",
+                        "이전 값": "N/A",
+                        "변화": "N/A",
+                        "유동성 영향": liquidity_impact,
+                        "출처": f'<a href="{get_fred_link(series_id)}" target="_blank">🔗 {series_id}</a>',
+                        "하이라이트": highlight,
+                        "변화_수치": 0,
+                        "순서": order
+                    })
+        
+        if data_list:
+            df_display = pd.DataFrame(data_list)
+            df_display = df_display.sort_values(by=["순서"])
+            
+            st.markdown("### 📊 Fed Balance Sheet 데이터")
+            
+            # HTML 테이블
+            html_table = "<table style='width:100%; border-collapse: collapse;'>"
+            html_table += "<thead><tr style='background-color: #2d2d2d;'>"
+            html_table += "<th style='padding: 12px; text-align: left; color: white; width: 8%;'>분류</th>"
+            html_table += "<th style='padding: 12px; text-align: left; color: white; width: 18%;'>항목</th>"
+            html_table += "<th style='padding: 12px; text-align: left; color: white; width: 15%;'>설명</th>"
+            html_table += "<th style='padding: 12px; text-align: right; color: white; width: 12%;'>현재 값</th>"
+            html_table += "<th style='padding: 12px; text-align: right; color: white; width: 12%;'>이전 값</th>"
+            html_table += "<th style='padding: 12px; text-align: right; color: white; width: 12%;'>변화</th>"
+            html_table += "<th style='padding: 12px; text-align: left; color: white; width: 15%;'>유동성 영향</th>"
+            html_table += "<th style='padding: 12px; text-align: center; color: white; width: 8%;'>출처</th>"
+            html_table += "</tr></thead><tbody>"
+            
+            current_category = None
+            for _, row in df_display.iterrows():
+                bg_color = "#3d3d00" if row["하이라이트"] else "#1e1e1e"
+                border_style = "border: 2px solid #ffd700;" if row["하이라이트"] else ""
+                indent_style = "padding-left: 30px;" if row["항목"].startswith("  ㄴ") else ""
+                
+                if current_category != row["분류"]:
+                    if current_category is not None:
+                        html_table += "<tr style='height: 10px; background-color: #0e1117;'><td colspan='8'></td></tr>"
+                    current_category = row["분류"]
+                
+                change_text = row["변화"]
+                if "▲" in change_text:
+                    change_color = "color: #4ade80;"
+                elif "▼" in change_text:
+                    change_color = "color: #f87171;"
+                else:
+                    change_color = "color: white;"
+                
+                liquidity_text = row["유동성 영향"]
+                if "↑" in liquidity_text and "유동성" in liquidity_text:
+                    liquidity_color = "color: #4ade80;"
+                elif "↓" in liquidity_text:
+                    liquidity_color = "color: #f87171;"
+                else:
+                    liquidity_color = "color: #fbbf24;"
+                
+                html_table += f"<tr style='background-color: {bg_color}; {border_style}'>"
+                html_table += f"<td style='padding: 12px; color: #9ca3af; font-weight: 600; font-size: 13px;'>{row['분류']}</td>"
+                html_table += f"<td style='padding: 12px; {indent_style} color: white; font-size: 14px;'>{row['항목']}</td>"
+                html_table += f"<td style='padding: 12px; color: #d1d5db; font-size: 13px;'>{row['설명']}</td>"
+                html_table += f"<td style='padding: 12px; text-align: right; color: white; font-size: 14px;'>{row['현재 값']}</td>"
+                html_table += f"<td style='padding: 12px; text-align: right; color: white; font-size: 14px;'>{row['이전 값']}</td>"
+                html_table += f"<td style='padding: 12px; text-align: right; {change_color} font-size: 14px;'><b>{change_text}</b></td>"
+                html_table += f"<td style='padding: 12px; {liquidity_color} font-size: 13px;'><b>{liquidity_text}</b></td>"
+                html_table += f"<td style='padding: 12px; text-align: center; font-size: 13px;'>{row['출처']}</td>"
+                html_table += "</tr>"
+            
+            html_table += "</tbody></table>"
+            st.markdown(html_table, unsafe_allow_html=True)
+            
+            # 차트 섹션
+            st.markdown("---")
+            st.markdown("### 📈 주요 항목 추이 (최근 52주)")
+            
+            chart_names = list(chart_data.keys())
+            for i in range(0, len(chart_names), 2):
+                cols = st.columns(2)
+                
+                for j, col in enumerate(cols):
+                    if i + j < len(chart_names):
+                        name = chart_names[i + j]
+                        data = chart_data[name]
+                        
+                        with col:
+                            fig = create_balance_sheet_chart(data["df"], name, data["series_id"])
+                            if fig:
+                                st.plotly_chart(fig, use_container_width=True)
+            
+            # 추가 정보
+            st.markdown("---")
+            with st.expander("📌 항목별 상세 설명 보기"):
+                st.markdown("""
+                #### 💰 자산 항목 (Assets)
+                - **총자산**: 연준 대차대조표의 전체 자산 규모. 증가하면 통화량 증가로 시장 유동성이 높아집니다.
+                - **연준 보유 증권**: 국채와 주택저당증권(MBS)을 매입하여 시장에 유동성을 공급합니다. 양적완화(QE)의 핵심 지표입니다.
+                - **SRF (상설레포)**: 은행이 담보를 제공하고 연준으로부터 단기 자금을 조달하는 시설입니다.
+                - **대출**: 연준이 금융기관에 제공하는 긴급 유동성입니다.
+                
+                #### 💳 부채 항목 (Liabilities)
+                - **지급준비금**: 은행들이 연준에 예치한 초과 준비금입니다.
+                - **TGA (재무부 일반계정)**: 미 재무부가 연준에 보관하는 현금입니다.
+                - **RRP (역레포)**: 머니마켓펀드 등이 초단기로 연준에 자금을 예치하는 제도입니다.
+                - **MMF**: 머니마켓펀드의 총 자산 규모입니다.
+                """)
+        
+        st.caption("데이터 출처: Federal Reserve Economic Data (FRED)")
+    
+    # ==================== Tab 2: 금리 스프레드 ====================
+    with tab2:
+        st.header("금리 스프레드 모니터링")
+        
+        # 사이드바 설정 (탭 안에서)
+        with st.sidebar:
+            st.markdown("### 📅 조회 기간 설정")
+            
+            date_mode = st.radio(
+                "기간 선택 방식",
+                ["빠른 선택", "직접 입력"],
+                index=0,
+                key="spread_date_mode"
+            )
+            
+            if date_mode == "빠른 선택":
+                period = st.selectbox(
+                    "조회 기간",
+                    ["1개월", "3개월", "6개월", "1년", "2년", "5년", "10년", "전체"],
+                    index=3,
+                    key="spread_period"
+                )
+                
+                period_map = {
+                    "1개월": 30, "3개월": 90, "6개월": 180, "1년": 365,
+                    "2년": 730, "5년": 1825, "10년": 3650, "전체": 365 * 20
+                }
+                
+                start_date = (datetime.now() - timedelta(days=period_map[period])).strftime('%Y-%m-%d')
+                end_date = datetime.now().strftime('%Y-%m-%d')
+                
             else:
-                data_list.append({
-                    "분류": category,
-                    "항목": name,
-                    "설명": description,
-                    "현재 값": "N/A",
-                    "이전 값": "N/A",
-                    "변화": "N/A",
-                    "유동성 영향": liquidity_impact,
-                    "출처": f'<a href="{get_fred_link(series_id)}" target="_blank">🔗 {series_id}</a>',
-                    "하이라이트": highlight,
-                    "변화_수치": 0,
-                    "순서": order
-                })
-    
-    if not data_list:
-        st.error("데이터를 불러올 수 없습니다.")
-        return
-    
-    # DataFrame 생성 및 정렬 (순서 번호로 정렬)
-    df_display = pd.DataFrame(data_list)
-    df_display = df_display.sort_values(by=["순서"])
-    
-    # 테이블 표시
-    st.markdown("### 📊 Fed Balance Sheet 데이터")
-    
-    # HTML 테이블로 표시 (링크 지원)
-    html_table = "<table style='width:100%; border-collapse: collapse;'>"
-    html_table += "<thead><tr style='background-color: #2d2d2d;'>"
-    html_table += "<th style='padding: 12px; text-align: left; color: white; width: 8%;'>분류</th>"
-    html_table += "<th style='padding: 12px; text-align: left; color: white; width: 18%;'>항목</th>"
-    html_table += "<th style='padding: 12px; text-align: left; color: white; width: 15%;'>설명</th>"
-    html_table += "<th style='padding: 12px; text-align: right; color: white; width: 12%;'>현재 값</th>"
-    html_table += "<th style='padding: 12px; text-align: right; color: white; width: 12%;'>이전 값</th>"
-    html_table += "<th style='padding: 12px; text-align: right; color: white; width: 12%;'>변화</th>"
-    html_table += "<th style='padding: 12px; text-align: left; color: white; width: 15%;'>유동성 영향</th>"
-    html_table += "<th style='padding: 12px; text-align: center; color: white; width: 8%;'>출처</th>"
-    html_table += "</tr></thead><tbody>"
-    
-    current_category = None
-    for _, row in df_display.iterrows():
-        bg_color = "#3d3d00" if row["하이라이트"] else "#1e1e1e"
-        border_style = "border: 2px solid #ffd700;" if row["하이라이트"] else ""
-        
-        # 세부 항목 스타일링 (들여쓰기)
-        indent_style = "padding-left: 30px;" if row["항목"].startswith("  ㄴ") else ""
-        
-        # 분류가 바뀔 때 구분선 추가
-        if current_category != row["분류"]:
-            if current_category is not None:
-                html_table += "<tr style='height: 10px; background-color: #0e1117;'><td colspan='8'></td></tr>"
-            current_category = row["분류"]
-        
-        # 변화 색상 적용
-        change_text = row["변화"]
-        if "▲" in change_text:
-            change_color = "color: #4ade80;"
-        elif "▼" in change_text:
-            change_color = "color: #f87171;"
-        else:
-            change_color = "color: white;"
-        
-        # 유동성 영향 색상 적용
-        liquidity_text = row["유동성 영향"]
-        if "↑" in liquidity_text and "유동성" in liquidity_text:
-            liquidity_color = "color: #4ade80;"  # 초록색
-        elif "↓" in liquidity_text:
-            liquidity_color = "color: #f87171;"  # 빨간색
-        else:
-            liquidity_color = "color: #fbbf24;"  # 노란색
-        
-        html_table += f"<tr style='background-color: {bg_color}; {border_style}'>"
-        html_table += f"<td style='padding: 12px; color: #9ca3af; font-weight: 600; font-size: 13px;'>{row['분류']}</td>"
-        html_table += f"<td style='padding: 12px; {indent_style} color: white; font-size: 14px;'>{row['항목']}</td>"
-        html_table += f"<td style='padding: 12px; color: #d1d5db; font-size: 13px;'>{row['설명']}</td>"
-        html_table += f"<td style='padding: 12px; text-align: right; color: white; font-size: 14px;'>{row['현재 값']}</td>"
-        html_table += f"<td style='padding: 12px; text-align: right; color: white; font-size: 14px;'>{row['이전 값']}</td>"
-        html_table += f"<td style='padding: 12px; text-align: right; {change_color} font-size: 14px;'><b>{change_text}</b></td>"
-        html_table += f"<td style='padding: 12px; {liquidity_color} font-size: 13px;'><b>{liquidity_text}</b></td>"
-        html_table += f"<td style='padding: 12px; text-align: center; font-size: 13px;'>{row['출처']}</td>"
-        html_table += "</tr>"
-    
-    html_table += "</tbody></table>"
-    
-    st.markdown(html_table, unsafe_allow_html=True)
-    
-    # 차트 섹션
-    st.markdown("---")
-    st.markdown("### 📈 주요 항목 추이 (최근 52주)")
-    
-    # 차트를 2열로 표시
-    chart_names = list(chart_data.keys())
-    for i in range(0, len(chart_names), 2):
-        cols = st.columns(2)
-        
-        for j, col in enumerate(cols):
-            if i + j < len(chart_names):
-                name = chart_names[i + j]
-                data = chart_data[name]
+                col1, col2 = st.columns(2)
                 
-                with col:
-                    fig = create_chart(data["df"], name, data["series_id"])
-                    if fig:
-                        st.plotly_chart(fig, use_container_width=True)
-    
-    # 추가 정보
-    st.markdown("---")
-    st.markdown("""
-    ### 📌 항목별 상세 설명
-    
-    #### 💰 자산 항목 (Assets)
-    - **총자산**: 연준 대차대조표의 전체 자산 규모. 증가하면 통화량 증가로 시장 유동성이 높아집니다.
-    - **연준 보유 증권**: 국채와 주택저당증권(MBS)을 매입하여 시장에 유동성을 공급합니다. 양적완화(QE)의 핵심 지표입니다.
-    - **SRF (상설레포)**: 은행이 담보를 제공하고 연준으로부터 단기 자금을 조달하는 시설입니다. 증가하면 은행의 유동성이 개선됩니다.
-    - **대출**: 연준이 금융기관에 제공하는 긴급 유동성입니다. 증가하면 금융 시스템의 스트레스를 나타낼 수 있습니다.
-      - **Primary Credit**: 재무건전성이 양호한 은행에 제공하는 할인창구 1차 신용대출
-      - **Secondary Credit**: 재무상태가 취약한 은행에 제공하는 할인창구 2차 신용대출 (금리가 더 높음)
-      - **Seasonal Credit**: 계절적 자금 수요가 있는 소규모 은행에 제공하는 대출
-    
-    #### 💳 부채 항목 (Liabilities)
-    - **지급준비금**: 은행들이 연준에 예치한 초과 준비금입니다. 증가하면 은행의 대출 여력이 높아집니다.
-    - **TGA (재무부 일반계정)**: 미 재무부가 연준에 보관하는 현금입니다. 증가하면 시장에서 유동성이 빠져나가 긴축 효과를 냅니다.
-    - **RRP (역레포)**: 머니마켓펀드 등이 초단기로 연준에 자금을 예치하는 제도입니다. 증가하면 시장 유동성이 흡수됩니다.
-    - **MMF**: 머니마켓펀드의 총 자산 규모입니다. 증가는 투자자들이 안전자산을 선호함을 의미합니다.
-    - **Retail MMF**: 개인투자자가 주로 이용하는 머니마켓펀드입니다. 개인의 현금 선호도를 나타냅니다.
-    
-    ### 💡 유동성 해석 가이드
-    
-    **시장 유동성 증가 요인 (긍정적)**
-    - 연준 보유 증권 ↑ (QE)
-    - 지급준비금 ↑
-    - 대출 ↑
-    - TGA ↓ (재무부 지출)
-    - RRP ↓
-    
-    **시장 유동성 감소 요인 (긴축적)**
-    - 연준 보유 증권 ↓ (QT)
-    - 지급준비금 ↓
-    - TGA ↑ (세금 징수)
-    - RRP ↑
-    
-    ---
-    
-    ### 🔍 주요 모니터링 포인트
-    - **하이라이트 항목** (금색 테두리): 지급준비금, TGA, SRF는 단기 유동성 변화를 파악하는 핵심 지표입니다.
-    - **데이터 주기**: 주간 단위로 업데이트됩니다 (매주 목요일 발표).
-    - **출처 링크**: 각 항목의 🔗 링크를 클릭하면 FRED 원본 데이터와 차트를 확인할 수 있습니다.
-    """)
-    
-    st.caption("데이터 출처: Federal Reserve Economic Data (FRED) - St. Louis Federal Reserve Bank")
+                with col1:
+                    start_date_input = st.date_input(
+                        "시작 날짜",
+                        value=datetime.now() - timedelta(days=365),
+                        max_value=datetime.now(),
+                        key="spread_start"
+                    )
+                
+                with col2:
+                    end_date_input = st.date_input(
+                        "종료 날짜",
+                        value=datetime.now(),
+                        max_value=datetime.now(),
+                        key="spread_end"
+                    )
+                
+                start_date = start_date_input.strftime('%Y-%m-%d')
+                end_date = end_date_input.strftime('%Y-%m-%d')
+            
+            st.markdown("---")
+            st.markdown("### 📊 스프레드 정보")
+            st.markdown("""
+            **주요 스프레드:**
+            1. **EFFR - IORB**: 유동성 지표
+            2. **SOFR - RRP**: 레포시장
+            3. **3M TB - EFFR**: 금리 기대
+            4. **10Y - 2Y**: 경기 사이클
+            5. **10Y - 3M**: 침체 선행지표
+            6. **STLFSI4**: 금융 스트레스
+            """)
+        
+        # 조회 기간 표시
+        st.info(f"📅 **조회 기간**: {start_date} ~ {end_date}")
+        
+        # 현재 상태 요약
+        st.subheader("📍 현재 상태")
+        
+        summary_cols = st.columns(6)
+        
+        for idx, (key, spread_info) in enumerate(SPREADS.items()):
+            with summary_cols[idx]:
+                with st.spinner(f'{spread_info["name"]} 로딩 중...'):
+                    df_spread, latest_value, df_components = calculate_spread(
+                        spread_info, FRED_API_KEY, start_date, end_date
+                    )
+                    
+                    if latest_value is not None:
+                        if 'signals' in spread_info:
+                            status_msg = get_signal_status(latest_value, spread_info['signals'])
+                        else:
+                            in_range = spread_info['threshold_min'] <= latest_value <= spread_info['threshold_max']
+                            status_msg = "✅ 정상" if in_range else "⚠️ 주의"
+                        
+                        value_unit = "" if spread_info.get('is_single_series', False) else "bp"
+                        
+                        st.metric(
+                            label=spread_info['name'],
+                            value=f"{latest_value:.2f}{value_unit}",
+                            delta=status_msg.split(' - ')[0] if ' - ' in status_msg else status_msg
+                        )
+                        st.caption(spread_info['description'])
+        
+        # 연준 정책금리 프레임워크
+        st.markdown("---")
+        st.subheader("🎯 연준 정책금리 프레임워크")
+        
+        with st.spinner('데이터 로딩 중...'):
+            policy_series = {
+                'SOFR': '담보부 익일물 금리',
+                'RRPONTSYAWARD': 'ON RRP (하한)',
+                'IORB': '준비금 이자율',
+                'EFFR': '연방기금 실효금리',
+                'DFEDTARL': 'FF 목표 하한',
+                'DFEDTARU': 'FF 목표 상한'
+            }
+            
+            policy_data = {}
+            for series_id in policy_series.keys():
+                df = fetch_fred_data(series_id, FRED_API_KEY, limit=None, start_date=start_date, end_date=end_date)
+                if df is not None:
+                    policy_data[series_id] = df
+            
+            if len(policy_data) > 0:
+                combined_df = pd.DataFrame()
+                for series_id, df in policy_data.items():
+                    combined_df[series_id] = df['value']
+                
+                combined_df = combined_df.ffill().dropna()
+                
+                fig = go.Figure()
+                
+                if 'DFEDTARL' in combined_df.columns and 'DFEDTARU' in combined_df.columns:
+                    fig.add_trace(go.Scatter(
+                        x=combined_df.index, y=combined_df['DFEDTARU'],
+                        mode='lines', name='FF 목표 상한',
+                        line=dict(color='rgba(200,200,200,0.3)', width=1, dash='dash')
+                    ))
+                    fig.add_trace(go.Scatter(
+                        x=combined_df.index, y=combined_df['DFEDTARL'],
+                        mode='lines', name='FF 목표 하한',
+                        line=dict(color='rgba(200,200,200,0.3)', width=1, dash='dash'),
+                        fill='tonexty', fillcolor='rgba(200,200,200,0.1)'
+                    ))
+                
+                colors = {
+                    'SOFR': '#FF6B6B', 'RRPONTSYAWARD': '#4ECDC4',
+                    'IORB': '#95E1D3', 'EFFR': '#F38181'
+                }
+                
+                for series_id, label in policy_series.items():
+                    if series_id in combined_df.columns and series_id not in ['DFEDTARL', 'DFEDTARU']:
+                        fig.add_trace(go.Scatter(
+                            x=combined_df.index, y=combined_df[series_id],
+                            mode='lines', name=f'{series_id} ({label})',
+                            line=dict(color=colors.get(series_id, '#999999'), width=2)
+                        ))
+                
+                fig.update_layout(
+                    title="연준 정책금리 프레임워크 및 시장 금리",
+                    xaxis_title="날짜", yaxis_title="금리 (%)",
+                    hovermode='x unified', height=500,
+                    showlegend=True,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.info("""
+                    **금리 조절 메커니즘:**
+                    - 목표 범위: FOMC 설정
+                    - IORB: 상한 역할
+                    - ON RRP: 하한 역할
+                    - EFFR: 실제 시장금리
+                    """)
+                
+                with col2:
+                    if len(combined_df) > 0:
+                        latest = combined_df.iloc[-1]
+                        st.success(f"""
+                        **최신 금리 (%):**
+                        - SOFR: {latest.get('SOFR', 0):.2f}%
+                        - EFFR: {latest.get('EFFR', 0):.2f}%
+                        - IORB: {latest.get('IORB', 0):.2f}%
+                        - ON RRP: {latest.get('RRPONTSYAWARD', 0):.2f}%
+                        """)
+        
+        # 상세 차트
+        st.markdown("---")
+        st.subheader("📈 상세 차트")
+        
+        spread_tabs = st.tabs([spread_info['name'] for spread_info in SPREADS.values()])
+        
+        for idx, (key, spread_info) in enumerate(SPREADS.items()):
+            with spread_tabs[idx]:
+                with st.spinner('데이터 로딩 중...'):
+                    df_spread, latest_value, df_components = calculate_spread(
+                        spread_info, FRED_API_KEY, start_date, end_date
+                    )
+                    
+                    if df_spread is not None:
+                        col1, col2 = st.columns([2, 1])
+                        
+                        with col1:
+                            stat_cols = st.columns(4)
+                            value_unit = "" if spread_info.get('is_single_series', False) else "bp"
+                            
+                            with stat_cols[0]:
+                                st.metric("현재 값", f"{latest_value:.2f}{value_unit}")
+                            with stat_cols[1]:
+                                st.metric("평균", f"{df_spread['spread'].mean():.2f}{value_unit}")
+                            with stat_cols[2]:
+                                st.metric("최대", f"{df_spread['spread'].max():.2f}{value_unit}")
+                            with stat_cols[3]:
+                                st.metric("최소", f"{df_spread['spread'].min():.2f}{value_unit}")
+                        
+                        with col2:
+                            if 'signals' in spread_info:
+                                current_signal = get_signal_status(latest_value, spread_info['signals'])
+                                signal_lines = ["**현재 신호:**", current_signal, ""]
+                            else:
+                                signal_lines = []
+                            
+                            info_text = "\n".join(signal_lines + [
+                                f"**정상 범위:** {spread_info['normal_range']}",
+                                "", f"**의미:** {spread_info['description']}",
+                                "", f"**해석:** {spread_info['interpretation']}"
+                            ])
+                            
+                            st.info(info_text)
+                        
+                        st.plotly_chart(
+                            create_spread_chart(df_spread, spread_info['name'], spread_info, latest_value),
+                            use_container_width=True
+                        )
+                        
+                        if not spread_info.get('is_single_series', False) and df_components is not None:
+                            with st.expander("구성 요소 보기"):
+                                st.plotly_chart(
+                                    create_components_chart(df_components, spread_info['series']),
+                                    use_container_width=True
+                                )
+                                
+                                latest_components = df_components.iloc[-1]
+                                st.dataframe(
+                                    pd.DataFrame({
+                                        '지표': spread_info['series'],
+                                        '현재 값 (%)': [f"{val:.4f}" for val in latest_components.values]
+                                    }),
+                                    hide_index=True
+                                )
+                    else:
+                        st.error("데이터를 불러올 수 없습니다.")
+        
+        st.caption(f"데이터 출처: Federal Reserve Economic Data (FRED)")
 
 if __name__ == "__main__":
     main()
