@@ -1067,7 +1067,7 @@ def main():
                 if fg_data:
                     # Fear & Greed 게이지 차트
                     fig_fg = go.Figure(go.Indicator(
-                        mode="gauge+number+delta",
+                        mode="gauge+number",
                         value=fg_data["score"],
                         domain={'x': [0, 1], 'y': [0, 1]},
                         title={'text': f"{fg_data['emoji']} Fear & Greed Index", 'font': {'size': 18, 'color': '#83858C'}},
