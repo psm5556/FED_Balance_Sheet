@@ -56,7 +56,7 @@ FRED_API_KEY = st.secrets.get("FRED_API_KEY", "")
 SERIES_INFO = {
     "총자산 (Total Assets)": {
         "id": "WALCL",
-        "highlight": False,
+        "highlight": True,
         "category": "자산 (Assets)",
         "description": "연준의 전체 자산 규모",
         "liquidity_impact": "증가 시 시장 유동성 ↑",
@@ -92,7 +92,7 @@ SERIES_INFO = {
     },
     "  ㄴ Primary Credit": {
         "id": "WLCFLPCL",
-        "highlight": False,
+        "highlight": True,
         "category": "자산 (Assets)",
         "description": "할인창구 1차 신용대출",
         "liquidity_impact": "증가 시 은행 유동성 ↑",
@@ -137,7 +137,7 @@ SERIES_INFO = {
     },
     "RRP (역레포)": {
         "id": "RRPONTSYD",
-        "highlight": False,
+        "highlight": True,
         "category": "부채 (Liabilities)",
         "description": "MMF 등의 초단기 자금 흡수",
         "liquidity_impact": "증가 시 시장 유동성 ↓",
@@ -146,7 +146,7 @@ SERIES_INFO = {
     },
     "MMF (Money Market Funds)": {
         "id": "MMMFFAQ027S",
-        "highlight": False,
+        "highlight": True,
         "category": "부채 (Liabilities)",
         "description": "머니마켓펀드 총 자산",
         "liquidity_impact": "증가 시 현금 보유 선호 ↑",
