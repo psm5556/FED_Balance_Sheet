@@ -316,6 +316,22 @@ def create_balance_sheet_chart(df, title, series_id):
 # ==================== 금리 스프레드 관련 ====================
 
 SPREADS = {
+    "SOFR-IORB": {
+        "name": "SOFR - IORB",
+        "series": ["SOFR", "IORB"],
+        "multiplier": 1000,
+        "threshold_min": 0,
+        "threshold_max": 10,
+        "description": "은행간 신뢰도 및 유동성 선호 지표",
+        "normal_range": "0 ~ +10bp",
+        "interpretation": "양수: 은행간 거래 활발 (정상) / 0에 근접 또는 음수: 은행들이 서로를 포기하고 연준 예치 선호 (신뢰 위기)",
+        "signals": {
+            "crisis": (float('-inf'), 0, "🚨 은행간 신뢰 붕괴 - 연준 예치 선호"),
+            "warning": (0, 2, "⚠️ 은행간 거래 위축 - 주의 필요"),
+            "normal": (2, 10, "✅ 정상 - 은행간 거래 활발"),
+            "tight": (10, float('inf'), "📈 레포시장 타이트 - 담보 수요 증가")
+        }
+    },
     "EFFR-IORB": {
         "name": "EFFR - IORB",
         "series": ["EFFR", "IORB"],
@@ -513,7 +529,7 @@ def create_spread_chart(df, spread_name, spread_info, latest_value):
             'stress': 'red', 'severe_inversion': 'red', 'strong_recession': 'red',
             'tight': 'orange', 'abnormal': 'gray', 'loose': 'lightgreen',
             'steep': 'lightblue', 'severe_stress': 'red', 'elevated_stress': 'orange',
-            'low_stress': 'lightgreen'
+            'low_stress': 'lightgreen', 'crisis': 'red', 'warning': 'orange'
         }
         
         for signal_name, (min_val, max_val, message) in spread_info['signals'].items():
@@ -1081,12 +1097,13 @@ def main():
             st.markdown("### 📊 스프레드 정보")
             st.markdown("""
             **주요 스프레드:**
-            1. **EFFR - IORB**: 유동성 지표 (시장금리 - Fed 지급금리)
-            2. **SOFR - RRP**: 레포시장 (담보부 레포 - 역레포)
-            3. **3M TB - EFFR**: 금리 기대 (3개월 국채 - 연방기금)
-            4. **10Y - 2Y**: 경기 사이클 (장기물 - 중기물)
-            5. **10Y - 3M**: 침체 선행지표 (장기물 - 초단기물)
-            6. **STLFSI4**: 금융 스트레스 인덱스 (4주 평균 이동성의 방향성 중요)
+            1. **SOFR - IORB**: 은행간 신뢰도 (레포금리 - 준비금금리)
+            2. **EFFR - IORB**: 유동성 지표 (시장금리 - Fed 지급금리)
+            3. **SOFR - RRP**: 레포시장 (담보부 레포 - 역레포)
+            4. **3M TB - EFFR**: 금리 기대 (3개월 국채 - 연방기금)
+            5. **10Y - 2Y**: 경기 사이클 (장기물 - 중기물)
+            6. **10Y - 3M**: 침체 선행지표 (장기물 - 초단기물)
+            7. **STLFSI4**: 금융 스트레스 인덱스 (4주 평균 이동성의 방향성 중요)
             """)
         
         # 조회 기간 표시
@@ -1232,7 +1249,7 @@ def main():
         # 현재 상태 요약
         st.subheader("📍 현재 상태")
         
-        summary_cols = st.columns(6)
+        summary_cols = st.columns(7)
         
         for idx, (key, spread_info) in enumerate(SPREADS.items()):
             with summary_cols[idx]:
