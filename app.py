@@ -58,7 +58,7 @@ except:
 
 # ==================== 공통 함수 ====================
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1800)  # 30분으로 캐시 시간 단축
 def fetch_fred_data(series_id, api_key, limit=10, start_date=None, end_date=None):
     """FRED API에서 데이터 가져오기 - 항상 date 컬럼과 value 컬럼을 가진 DataFrame 반환"""
     if not api_key:
@@ -72,15 +72,22 @@ def fetch_fred_data(series_id, api_key, limit=10, start_date=None, end_date=None
             "api_key": api_key,
             "file_type": "json",
             "observation_start": start_date,
-            "observation_end": end_date
+            "observation_end": end_date,
+            "sort_order": "desc"  # 최신 데이터 우선
         }
     else:
+        # 날짜 범위가 지정되지 않은 경우에도 최신 데이터 확보
+        # 최근 30일 데이터 중 limit개 가져오기
+        default_end = datetime.now().strftime('%Y-%m-%d')
+        default_start = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
         params = {
             "series_id": series_id,
             "api_key": api_key,
             "file_type": "json",
             "sort_order": "desc",
-            "limit": limit
+            "limit": limit,
+            "observation_start": default_start,
+            "observation_end": default_end
         }
     
     try:
@@ -95,8 +102,8 @@ def fetch_fred_data(series_id, api_key, limit=10, start_date=None, end_date=None
                 # 결측치 제거
                 df = df.dropna(subset=['value'])
                 
-                # 항상 date 컬럼을 유지하고 정렬
-                df = df[['date', 'value']].sort_values('date')
+                # 항상 date 컬럼을 유지하고 정렬 (최신순)
+                df = df[['date', 'value']].sort_values('date', ascending=False)
                 
                 return df
     except Exception as e:
@@ -267,7 +274,7 @@ def create_balance_sheet_chart(df, title, series_id):
         # date 컬럼이 없으면 인덱스를 date로 사용
         df_work['date'] = df_work.index
     
-    # 정렬
+    # 정렬 (시간순)
     df_sorted = df_work.sort_values('date')
     
     fig = go.Figure()
@@ -420,7 +427,7 @@ def calculate_spread(spread_info, api_key, start_date, end_date=None):
         df['spread'] = df['value'] * spread_info['multiplier']
         df['ma_4w'] = df['spread'].rolling(window=4, min_periods=1).mean()
         
-        latest_value = df['spread'].iloc[-1] if len(df) > 0 else None
+        latest_value = df['spread'].iloc[0] if len(df) > 0 else None  # 최신값은 첫 행
         
         df_components = df[['value']].copy()
         df_components.columns = [series_id]
@@ -443,10 +450,11 @@ def calculate_spread(spread_info, api_key, start_date, end_date=None):
     df = df1.join(df2, how='outer', rsuffix='_2')
     df.columns = [series1_id, series2_id]
     df = df.ffill().dropna()
+    df = df.sort_index(ascending=False)  # 최신순 정렬
     
     df['spread'] = (df[series1_id] - df[series2_id]) * spread_info['multiplier']
     
-    latest_value = df['spread'].iloc[-1] if len(df) > 0 else None
+    latest_value = df['spread'].iloc[0] if len(df) > 0 else None  # 최신값은 첫 행
     
     return df, latest_value, df[[series1_id, series2_id]]
 
@@ -459,21 +467,24 @@ def get_signal_status(value, signals):
 
 def create_spread_chart(df, spread_name, spread_info, latest_value):
     """스프레드 차트 생성"""
+    # 시간순 정렬을 위해 복사본 생성
+    df_sorted = df.sort_index(ascending=True)
+    
     fig = go.Figure()
     
     if spread_info.get('is_single_series', False):
         fig.add_trace(go.Scatter(
-            x=df.index,
-            y=df['spread'],
+            x=df_sorted.index,
+            y=df_sorted['spread'],
             mode='lines',
             name='STLFSI4',
             line=dict(color='#2E86DE', width=2)
         ))
         
-        if 'ma_4w' in df.columns:
+        if 'ma_4w' in df_sorted.columns:
             fig.add_trace(go.Scatter(
-                x=df.index,
-                y=df['ma_4w'],
+                x=df_sorted.index,
+                y=df_sorted['ma_4w'],
                 mode='lines',
                 name='4주 이동평균',
                 line=dict(color='#FF6B6B', width=2, dash='dash')
@@ -488,8 +499,8 @@ def create_spread_chart(df, spread_name, spread_info, latest_value):
         )
     else:
         fig.add_trace(go.Scatter(
-            x=df.index,
-            y=df['spread'],
+            x=df_sorted.index,
+            y=df_sorted['spread'],
             mode='lines',
             name='Spread',
             line=dict(color='#2E86DE', width=2)
@@ -530,13 +541,16 @@ def create_spread_chart(df, spread_name, spread_info, latest_value):
 
 def create_components_chart(df_components, series_ids):
     """구성 요소 차트 생성"""
+    # 시간순 정렬
+    df_sorted = df_components.sort_index(ascending=True)
+    
     fig = go.Figure()
     
     colors = ['#EE5A6F', '#4ECDC4']
     for i, series in enumerate(series_ids):
         fig.add_trace(go.Scatter(
-            x=df_components.index,
-            y=df_components[series],
+            x=df_sorted.index,
+            y=df_sorted[series],
             mode='lines',
             name=series,
             line=dict(color=colors[i], width=2)
@@ -759,7 +773,15 @@ def get_vix_index():
 
 def main():
     st.title("📊 Fed 모니터링 통합 대시보드")
-    st.caption(f"마지막 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # 캐시 초기화 버튼 추가
+    col1, col2 = st.columns([6, 1])
+    with col1:
+        st.caption(f"마지막 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    with col2:
+        if st.button("🔄 새로고침"):
+            st.cache_data.clear()
+            st.rerun()
     
     # API 키 확인
     if not FRED_API_KEY:
@@ -847,22 +869,23 @@ def main():
                 liquidity_impact = info["liquidity_impact"]
                 order = info["order"]
                 show_chart = info.get("show_chart", False)
-
-                # 테이블용: 항상 실제 최신 2개 데이터 가져오기 (limit=2, 내림차순)
-                df_table = fetch_fred_data(series_id, FRED_API_KEY, limit=2)
-
-                # 차트용: 선택한 조회기간의 데이터 사용
+                
+                # 표용 데이터 - 최신 10개 데이터 가져오기
+                df = fetch_fred_data(series_id, FRED_API_KEY, limit=10)
+                
                 if show_chart:
-                    df_chart = fetch_fred_data(series_id, FRED_API_KEY, limit=None,
-                                             start_date=bs_start_date, end_date=bs_end_date)
+                    # 차트용 데이터는 설정된 조회기간 사용
+                    df_chart = fetch_fred_data(series_id, FRED_API_KEY, limit=None, 
+                                               start_date=bs_start_date, end_date=bs_end_date)
                     chart_data[name] = {"df": df_chart, "series_id": series_id}
-
-                if df_table is not None and len(df_table) >= 2:
-                    # fetch_fred_data는 limit 사용 시 desc 정렬, 최종적으로 date 오름차순 정렬
-                    # 따라서 iloc[-1]이 최신, iloc[-2]가 이전
-                    current_value = df_table.iloc[-1]["value"]
-                    previous_value = df_table.iloc[-2]["value"]
+                
+                if df is not None and len(df) >= 2:
+                    # 최신 데이터가 첫 번째 행
+                    current_value = df.iloc[0]["value"]
+                    previous_value = df.iloc[1]["value"]
                     change = current_value - previous_value
+                    current_date = df.iloc[0]["date"]
+                    previous_date = df.iloc[1]["date"]
                     
                     data_list.append({
                         "분류": category,
@@ -875,7 +898,9 @@ def main():
                         "출처": f'<a href="{get_fred_link(series_id)}" target="_blank">🔗 {series_id}</a>',
                         "하이라이트": highlight,
                         "변화_수치": change,
-                        "순서": order
+                        "순서": order,
+                        "현재_날짜": current_date.strftime('%Y-%m-%d'),
+                        "이전_날짜": previous_date.strftime('%Y-%m-%d')
                     })
                 else:
                     data_list.append({
@@ -889,12 +914,18 @@ def main():
                         "출처": f'<a href="{get_fred_link(series_id)}" target="_blank">🔗 {series_id}</a>',
                         "하이라이트": highlight,
                         "변화_수치": 0,
-                        "순서": order
+                        "순서": order,
+                        "현재_날짜": "N/A",
+                        "이전_날짜": "N/A"
                     })
         
         if data_list:
             df_display = pd.DataFrame(data_list)
             df_display = df_display.sort_values(by=["순서"])
+            
+            # 데이터 날짜 표시
+            if "현재_날짜" in df_display.columns and df_display["현재_날짜"].iloc[0] != "N/A":
+                st.success(f"✅ **최신 데이터 날짜**: {df_display['현재_날짜'].iloc[0]} | **비교 날짜**: {df_display['이전_날짜'].iloc[0]}")
             
             st.markdown("### 📊 Fed Balance Sheet 데이터")
             
@@ -1142,7 +1173,6 @@ def main():
                         number={'font': {'size': 40, 'color': '#83858C', 'family': 'Arial Black'}},
                         gauge={
                             'axis': {'range': [0, 80], 'tickwidth': 1, 'tickcolor': "#83858C"},
-                            # 'bar': {'color': vix_data["color"], 'thickness': 0.75},
                             'bgcolor': "white",
                             'borderwidth': 2,
                             'bordercolor': "gray",
@@ -1251,6 +1281,7 @@ def main():
                     combined_df[series_id] = df_indexed['value']
                 
                 combined_df = combined_df.ffill().dropna()
+                combined_df = combined_df.sort_index(ascending=True)  # 시간순 정렬
                 
                 fig = go.Figure()
                 
@@ -1302,7 +1333,7 @@ def main():
                 
                 with col2:
                     if len(combined_df) > 0:
-                        latest = combined_df.iloc[-1]
+                        latest = combined_df.iloc[-1]  # 최신 데이터는 마지막 행
                         st.success(f"""
                         **최신 금리 (%):**
                         - SOFR: {latest.get('SOFR', 0):.2f}%
@@ -1367,7 +1398,7 @@ def main():
                                     use_container_width=True
                                 )
                                 
-                                latest_components = df_components.iloc[-1]
+                                latest_components = df_components.iloc[0]  # 최신값은 첫 행
                                 st.dataframe(
                                     pd.DataFrame({
                                         '지표': spread_info['series'],
