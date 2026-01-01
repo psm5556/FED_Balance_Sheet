@@ -77,9 +77,9 @@ def fetch_fred_data(series_id, api_key, limit=10, start_date=None, end_date=None
         }
     else:
         # 날짜 범위가 지정되지 않은 경우에도 최신 데이터 확보
-        # 분기별 데이터도 고려하여 더 긴 기간 조회
+        # 최근 30일 데이터 중 limit개 가져오기
         default_end = datetime.now().strftime('%Y-%m-%d')
-        default_start = (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d')  # 2년으로 확장
+        default_start = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
         params = {
             "series_id": series_id,
             "api_key": api_key,
@@ -91,54 +91,23 @@ def fetch_fred_data(series_id, api_key, limit=10, start_date=None, end_date=None
         }
     
     try:
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params)
         if response.status_code == 200:
             data = response.json()
-            if "observations" in data and len(data["observations"]) > 0:
+            if "observations" in data:
                 df = pd.DataFrame(data["observations"])
-                
-                # date 컬럼 확인 및 변환
-                if "date" not in df.columns:
-                    st.error(f"시리즈 {series_id}: 'date' 컬럼을 찾을 수 없습니다. 사용 가능한 컬럼: {df.columns.tolist()}")
-                    return None
-                
-                # 날짜 변환
-                try:
-                    df["date"] = pd.to_datetime(df["date"])
-                except Exception as e:
-                    st.error(f"시리즈 {series_id}: 날짜 변환 오류 - {e}")
-                    return None
-                
-                # value 컬럼 확인 및 변환
-                if "value" not in df.columns:
-                    st.error(f"시리즈 {series_id}: 'value' 컬럼을 찾을 수 없습니다. 사용 가능한 컬럼: {df.columns.tolist()}")
-                    return None
-                
+                df["date"] = pd.to_datetime(df["date"])
                 df["value"] = pd.to_numeric(df["value"], errors="coerce")
                 
                 # 결측치 제거
                 df = df.dropna(subset=['value'])
                 
-                if len(df) == 0:
-                    st.warning(f"시리즈 {series_id}: 유효한 데이터가 없습니다.")
-                    return None
-                
                 # 항상 date 컬럼을 유지하고 정렬 (최신순)
                 df = df[['date', 'value']].sort_values('date', ascending=False)
                 
                 return df
-            else:
-                st.warning(f"시리즈 {series_id}: 데이터가 비어있습니다.")
-                return None
-        else:
-            st.error(f"시리즈 {series_id}: API 요청 실패 (상태 코드: {response.status_code})")
-            return None
-    except requests.exceptions.Timeout:
-        st.error(f"시리즈 {series_id}: 요청 시간 초과")
-        return None
     except Exception as e:
-        st.error(f"시리즈 {series_id}: 데이터 가져오기 오류 - {str(e)}")
-        return None
+        st.error(f"데이터 가져오기 오류: {e}")
     
     return None
 
@@ -235,16 +204,16 @@ SERIES_INFO = {
         "order": 10,
         "show_chart": True
     },
-    "MMF Institutional": {
-        "id": "WIMFNS",
+    "MMF (Money Market Funds)": {
+        "id": "MMMFFAQ027S",
         "highlight": True,
         "category": "부채 (Liabilities)",
-        "description": "기관투자자용 머니마켓펀드",
+        "description": "머니마켓펀드 총 자산",
         "liquidity_impact": "증가 시 현금 보유 선호 ↑",
         "order": 11,
         "show_chart": True
     },
-    "MMF Retail": {
+    "Retail MMF": {
         "id": "WRMFNS",
         "highlight": False,
         "category": "부채 (Liabilities)",
@@ -347,22 +316,6 @@ def create_balance_sheet_chart(df, title, series_id):
 # ==================== 금리 스프레드 관련 ====================
 
 SPREADS = {
-    "SOFR-IORB": {
-        "name": "SOFR - IORB",
-        "series": ["SOFR", "IORB"],
-        "multiplier": 1000,
-        "threshold_min": 0,
-        "threshold_max": 10,
-        "description": "은행간 신뢰도 및 유동성 선호 지표",
-        "normal_range": "0 ~ +10bp",
-        "interpretation": "양수: 은행간 거래 활발 (정상) / 0에 근접 또는 음수: 은행들이 서로를 포기하고 연준 예치 선호 (신뢰 위기)",
-        "signals": {
-            "crisis": (float('-inf'), 0, "🚨 은행간 신뢰 붕괴 - 연준 예치 선호"),
-            "warning": (0, 2, "⚠️ 은행간 거래 위축 - 주의 필요"),
-            "normal": (2, 10, "✅ 정상 - 은행간 거래 활발"),
-            "tight": (10, float('inf'), "📈 레포시장 타이트 - 담보 수요 증가")
-        }
-    },
     "EFFR-IORB": {
         "name": "EFFR - IORB",
         "series": ["EFFR", "IORB"],
@@ -560,7 +513,7 @@ def create_spread_chart(df, spread_name, spread_info, latest_value):
             'stress': 'red', 'severe_inversion': 'red', 'strong_recession': 'red',
             'tight': 'orange', 'abnormal': 'gray', 'loose': 'lightgreen',
             'steep': 'lightblue', 'severe_stress': 'red', 'elevated_stress': 'orange',
-            'low_stress': 'lightgreen', 'crisis': 'red', 'warning': 'orange'
+            'low_stress': 'lightgreen'
         }
         
         for signal_name, (min_val, max_val, message) in spread_info['signals'].items():
@@ -1066,7 +1019,7 @@ def main():
                 - **지급준비금**: 은행들이 연준에 예치한 초과 준비금입니다.
                 - **TGA (재무부 일반계정)**: 미 재무부가 연준에 보관하는 현금입니다.
                 - **RRP (역레포)**: 머니마켓펀드 등이 초단기로 연준에 자금을 예치하는 제도입니다.
-                - **MMF (머니마켓펀드)**: 기관투자자용과 개인투자자용 MMF의 총 자산 규모입니다. RRP의 주요 참여자입니다.
+                - **MMF**: 머니마켓펀드의 총 자산 규모입니다.
                 """)
         
         st.caption("데이터 출처: Federal Reserve Economic Data (FRED)")
@@ -1128,13 +1081,12 @@ def main():
             st.markdown("### 📊 스프레드 정보")
             st.markdown("""
             **주요 스프레드:**
-            1. **SOFR - IORB**: 은행간 신뢰도 (레포금리 - 준비금금리)
-            2. **EFFR - IORB**: 유동성 지표 (시장금리 - Fed 지급금리)
-            3. **SOFR - RRP**: 레포시장 (담보부 레포 - 역레포)
-            4. **3M TB - EFFR**: 금리 기대 (3개월 국채 - 연방기금)
-            5. **10Y - 2Y**: 경기 사이클 (장기물 - 중기물)
-            6. **10Y - 3M**: 침체 선행지표 (장기물 - 초단기물)
-            7. **STLFSI4**: 금융 스트레스 인덱스 (4주 평균 이동성의 방향성 중요)
+            1. **EFFR - IORB**: 유동성 지표 (시장금리 - Fed 지급금리)
+            2. **SOFR - RRP**: 레포시장 (담보부 레포 - 역레포)
+            3. **3M TB - EFFR**: 금리 기대 (3개월 국채 - 연방기금)
+            4. **10Y - 2Y**: 경기 사이클 (장기물 - 중기물)
+            5. **10Y - 3M**: 침체 선행지표 (장기물 - 초단기물)
+            6. **STLFSI4**: 금융 스트레스 인덱스 (4주 평균 이동성의 방향성 중요)
             """)
         
         # 조회 기간 표시
@@ -1280,7 +1232,7 @@ def main():
         # 현재 상태 요약
         st.subheader("📍 현재 상태")
         
-        summary_cols = st.columns(7)
+        summary_cols = st.columns(6)
         
         for idx, (key, spread_info) in enumerate(SPREADS.items()):
             with summary_cols[idx]:
