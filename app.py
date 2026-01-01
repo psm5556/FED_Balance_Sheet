@@ -848,17 +848,20 @@ def main():
                 order = info["order"]
                 show_chart = info.get("show_chart", False)
 
-                # 테이블과 차트 모두 동일한 조회기간 사용
-                df = fetch_fred_data(series_id, FRED_API_KEY, limit=None,
-                                   start_date=bs_start_date, end_date=bs_end_date)
+                # 테이블용: 항상 실제 최신 2개 데이터 가져오기 (limit=2, 내림차순)
+                df_table = fetch_fred_data(series_id, FRED_API_KEY, limit=2)
 
+                # 차트용: 선택한 조회기간의 데이터 사용
                 if show_chart:
-                    chart_data[name] = {"df": df, "series_id": series_id}
+                    df_chart = fetch_fred_data(series_id, FRED_API_KEY, limit=None,
+                                             start_date=bs_start_date, end_date=bs_end_date)
+                    chart_data[name] = {"df": df_chart, "series_id": series_id}
 
-                if df is not None and len(df) >= 2:
-                    # 날짜순 정렬되어 있으므로 마지막이 최신, 그 이전이 previous
-                    current_value = df.iloc[-1]["value"]
-                    previous_value = df.iloc[-2]["value"]
+                if df_table is not None and len(df_table) >= 2:
+                    # fetch_fred_data는 limit 사용 시 desc 정렬, 최종적으로 date 오름차순 정렬
+                    # 따라서 iloc[-1]이 최신, iloc[-2]가 이전
+                    current_value = df_table.iloc[-1]["value"]
+                    previous_value = df_table.iloc[-2]["value"]
                     change = current_value - previous_value
                     
                     data_list.append({
