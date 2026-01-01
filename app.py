@@ -923,22 +923,24 @@ def main():
             df_display = pd.DataFrame(data_list)
             df_display = df_display.sort_values(by=["순서"])
             
-            # 데이터 날짜 표시
+            # 데이터 업데이트 안내
             if "현재_날짜" in df_display.columns and df_display["현재_날짜"].iloc[0] != "N/A":
-                st.success(f"✅ **최신 데이터 날짜**: {df_display['현재_날짜'].iloc[0]} | **비교 날짜**: {df_display['이전_날짜'].iloc[0]}")
+                st.info(f"ℹ️ **데이터 기준**: 대부분의 항목이 {df_display['현재_날짜'].iloc[0]} 기준으로 업데이트되었습니다. (각 항목의 정확한 날짜는 표의 날짜 칼럼 참조)")
             
             st.markdown("### 📊 Fed Balance Sheet 데이터")
             
             # HTML 테이블
             html_table = "<table style='width:100%; border-collapse: collapse;'>"
             html_table += "<thead><tr style='background-color: #2d2d2d;'>"
-            html_table += "<th style='padding: 12px; text-align: left; color: white; width: 8%;'>분류</th>"
-            html_table += "<th style='padding: 12px; text-align: left; color: white; width: 18%;'>항목</th>"
-            html_table += "<th style='padding: 12px; text-align: left; color: white; width: 15%;'>설명</th>"
-            html_table += "<th style='padding: 12px; text-align: right; color: white; width: 12%;'>현재 값</th>"
-            html_table += "<th style='padding: 12px; text-align: right; color: white; width: 12%;'>이전 값</th>"
-            html_table += "<th style='padding: 12px; text-align: right; color: white; width: 12%;'>변화</th>"
-            html_table += "<th style='padding: 12px; text-align: left; color: white; width: 15%;'>유동성 영향</th>"
+            html_table += "<th style='padding: 12px; text-align: left; color: white; width: 6%;'>분류</th>"
+            html_table += "<th style='padding: 12px; text-align: left; color: white; width: 14%;'>항목</th>"
+            html_table += "<th style='padding: 12px; text-align: left; color: white; width: 12%;'>설명</th>"
+            html_table += "<th style='padding: 12px; text-align: center; color: white; width: 8%;'>현재 날짜</th>"
+            html_table += "<th style='padding: 12px; text-align: right; color: white; width: 10%;'>현재 값</th>"
+            html_table += "<th style='padding: 12px; text-align: center; color: white; width: 8%;'>이전 날짜</th>"
+            html_table += "<th style='padding: 12px; text-align: right; color: white; width: 10%;'>이전 값</th>"
+            html_table += "<th style='padding: 12px; text-align: right; color: white; width: 10%;'>변화</th>"
+            html_table += "<th style='padding: 12px; text-align: left; color: white; width: 14%;'>유동성 영향</th>"
             html_table += "<th style='padding: 12px; text-align: center; color: white; width: 8%;'>출처</th>"
             html_table += "</tr></thead><tbody>"
             
@@ -950,7 +952,7 @@ def main():
                 
                 if current_category != row["분류"]:
                     if current_category is not None:
-                        html_table += "<tr style='height: 10px; background-color: #0e1117;'><td colspan='8'></td></tr>"
+                        html_table += "<tr style='height: 10px; background-color: #0e1117;'><td colspan='10'></td></tr>"
                     current_category = row["분류"]
                 
                 change_text = row["변화"]
@@ -973,7 +975,9 @@ def main():
                 html_table += f"<td style='padding: 12px; color: #9ca3af; font-weight: 600; font-size: 13px;'>{row['분류']}</td>"
                 html_table += f"<td style='padding: 12px; {indent_style} color: white; font-size: 14px;'>{row['항목']}</td>"
                 html_table += f"<td style='padding: 12px; color: #d1d5db; font-size: 13px;'>{row['설명']}</td>"
+                html_table += f"<td style='padding: 12px; text-align: center; color: #60a5fa; font-size: 12px;'>{row['현재_날짜']}</td>"
                 html_table += f"<td style='padding: 12px; text-align: right; color: white; font-size: 14px;'>{row['현재 값']}</td>"
+                html_table += f"<td style='padding: 12px; text-align: center; color: #9ca3af; font-size: 12px;'>{row['이전_날짜']}</td>"
                 html_table += f"<td style='padding: 12px; text-align: right; color: white; font-size: 14px;'>{row['이전 값']}</td>"
                 html_table += f"<td style='padding: 12px; text-align: right; {change_color} font-size: 14px;'><b>{change_text}</b></td>"
                 html_table += f"<td style='padding: 12px; {liquidity_color} font-size: 13px;'><b>{liquidity_text}</b></td>"
