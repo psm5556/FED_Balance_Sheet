@@ -847,18 +847,18 @@ def main():
                 liquidity_impact = info["liquidity_impact"]
                 order = info["order"]
                 show_chart = info.get("show_chart", False)
-                
-                df = fetch_fred_data(series_id, FRED_API_KEY, limit=10)
-                
+
+                # 테이블과 차트 모두 동일한 조회기간 사용
+                df = fetch_fred_data(series_id, FRED_API_KEY, limit=None,
+                                   start_date=bs_start_date, end_date=bs_end_date)
+
                 if show_chart:
-                    # 차트용 데이터는 설정된 조회기간 사용
-                    df_chart = fetch_fred_data(series_id, FRED_API_KEY, limit=None, 
-                                               start_date=bs_start_date, end_date=bs_end_date)
-                    chart_data[name] = {"df": df_chart, "series_id": series_id}
-                
+                    chart_data[name] = {"df": df, "series_id": series_id}
+
                 if df is not None and len(df) >= 2:
-                    current_value = df.iloc[0]["value"]
-                    previous_value = df.iloc[1]["value"]
+                    # 날짜순 정렬되어 있으므로 마지막이 최신, 그 이전이 previous
+                    current_value = df.iloc[-1]["value"]
+                    previous_value = df.iloc[-2]["value"]
                     change = current_value - previous_value
                     
                     data_list.append({
