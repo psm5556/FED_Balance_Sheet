@@ -77,9 +77,9 @@ def fetch_fred_data(series_id, api_key, limit=10, start_date=None, end_date=None
         }
     else:
         # 날짜 범위가 지정되지 않은 경우에도 최신 데이터 확보
-        # 최근 30일 데이터 중 limit개 가져오기
+        # 분기별 데이터도 고려하여 더 긴 기간 조회
         default_end = datetime.now().strftime('%Y-%m-%d')
-        default_start = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
+        default_start = (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d')  # 2년으로 확장
         params = {
             "series_id": series_id,
             "api_key": api_key,
@@ -91,23 +91,54 @@ def fetch_fred_data(series_id, api_key, limit=10, start_date=None, end_date=None
         }
     
     try:
-        response = requests.get(url, params=params)
+        response = requests.get(url, params=params, timeout=10)
         if response.status_code == 200:
             data = response.json()
-            if "observations" in data:
+            if "observations" in data and len(data["observations"]) > 0:
                 df = pd.DataFrame(data["observations"])
-                df["date"] = pd.to_datetime(df["date"])
+                
+                # date 컬럼 확인 및 변환
+                if "date" not in df.columns:
+                    st.error(f"시리즈 {series_id}: 'date' 컬럼을 찾을 수 없습니다. 사용 가능한 컬럼: {df.columns.tolist()}")
+                    return None
+                
+                # 날짜 변환
+                try:
+                    df["date"] = pd.to_datetime(df["date"])
+                except Exception as e:
+                    st.error(f"시리즈 {series_id}: 날짜 변환 오류 - {e}")
+                    return None
+                
+                # value 컬럼 확인 및 변환
+                if "value" not in df.columns:
+                    st.error(f"시리즈 {series_id}: 'value' 컬럼을 찾을 수 없습니다. 사용 가능한 컬럼: {df.columns.tolist()}")
+                    return None
+                
                 df["value"] = pd.to_numeric(df["value"], errors="coerce")
                 
                 # 결측치 제거
                 df = df.dropna(subset=['value'])
                 
+                if len(df) == 0:
+                    st.warning(f"시리즈 {series_id}: 유효한 데이터가 없습니다.")
+                    return None
+                
                 # 항상 date 컬럼을 유지하고 정렬 (최신순)
                 df = df[['date', 'value']].sort_values('date', ascending=False)
                 
                 return df
+            else:
+                st.warning(f"시리즈 {series_id}: 데이터가 비어있습니다.")
+                return None
+        else:
+            st.error(f"시리즈 {series_id}: API 요청 실패 (상태 코드: {response.status_code})")
+            return None
+    except requests.exceptions.Timeout:
+        st.error(f"시리즈 {series_id}: 요청 시간 초과")
+        return None
     except Exception as e:
-        st.error(f"데이터 가져오기 오류: {e}")
+        st.error(f"시리즈 {series_id}: 데이터 가져오기 오류 - {str(e)}")
+        return None
     
     return None
 
@@ -204,16 +235,16 @@ SERIES_INFO = {
         "order": 10,
         "show_chart": True
     },
-    "MMF (Money Market Funds)": {
-        "id": "MMMFFAQ027S",
+    "MMF Institutional": {
+        "id": "WIMFNS",
         "highlight": True,
         "category": "부채 (Liabilities)",
-        "description": "머니마켓펀드 총 자산",
+        "description": "기관투자자용 머니마켓펀드",
         "liquidity_impact": "증가 시 현금 보유 선호 ↑",
         "order": 11,
         "show_chart": True
     },
-    "Retail MMF": {
+    "MMF Retail": {
         "id": "WRMFNS",
         "highlight": False,
         "category": "부채 (Liabilities)",
@@ -1035,7 +1066,7 @@ def main():
                 - **지급준비금**: 은행들이 연준에 예치한 초과 준비금입니다.
                 - **TGA (재무부 일반계정)**: 미 재무부가 연준에 보관하는 현금입니다.
                 - **RRP (역레포)**: 머니마켓펀드 등이 초단기로 연준에 자금을 예치하는 제도입니다.
-                - **MMF**: 머니마켓펀드의 총 자산 규모입니다.
+                - **MMF (머니마켓펀드)**: 기관투자자용과 개인투자자용 MMF의 총 자산 규모입니다. RRP의 주요 참여자입니다.
                 """)
         
         st.caption("데이터 출처: Federal Reserve Economic Data (FRED)")
