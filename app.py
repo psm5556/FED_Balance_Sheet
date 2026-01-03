@@ -1148,9 +1148,6 @@ def main():
                 
                 start_date = start_date_input.strftime('%Y-%m-%d')
                 end_date = end_date_input.strftime('%Y-%m-%d')
-            
-            st.markdown("---")
-            st.markdown("### 📊 스프레드 정보")
             st.markdown("---")
             st.markdown("### 📊 스프레드 정보")
             st.markdown("""
