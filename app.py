@@ -473,7 +473,7 @@ SPREADS = {
             "normal": (0, 20, "✅ 보통 수준"),
             "easing": (float('-inf'), 0, "💚 대출 기준 완화")
         },
-        "is_single_series": True
+        # "is_single_series": True
     }
 }
 
