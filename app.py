@@ -370,7 +370,7 @@ SPREADS = {
         "multiplier": 1000,
         "threshold_min": -10,
         "threshold_max": 10,
-        "description": "초단기 자금시장 유동성 지표",
+        "description": "연준 금리 통제력",
         "normal_range": "-10 ~ +10bp",
         "interpretation": "양수: 준비금 부족/유동성 타이트 / 음수: 초과 준비금/유동성 풍부",
         "signals": {
@@ -385,7 +385,7 @@ SPREADS = {
         "multiplier": 1000,
         "threshold_min": 0,
         "threshold_max": 10,
-        "description": "레포 시장 긴장도 지표",
+        "description": "민간 담보시장 vs 연준 유동성 흡수",
         "normal_range": "0 ~ +10bp",
         "interpretation": "양수: 정상 / >10bp: 담보 부족/레포시장 긴장 / 음수: 비정상",
         "signals": {
@@ -415,7 +415,7 @@ SPREADS = {
         "multiplier": 100,
         "threshold_min": 0,
         "threshold_max": 50,
-        "description": "경기 사이클 및 경기침체 예측 지표 (2s10s)",
+        "description": "경기 사이클 신호 (전통적 침체 지표)",
         "normal_range": "0 ~ +50bp",
         "interpretation": "음수(역전): 경기침체 신호 / 0~50bp: 정상 / >50bp: 가파른 성장 기대",
         "signals": {
@@ -431,7 +431,7 @@ SPREADS = {
         "multiplier": 100,
         "threshold_min": 0,
         "threshold_max": 100,
-        "description": "가장 강력한 경기침체 선행 지표",
+        "description": "정책 신뢰 기반 침체 지표",
         "normal_range": "0 ~ +100bp",
         "interpretation": "<-50bp: 매우 강한 침체 신호 / 0~100bp: 정상 / >100bp: 장단기 프리미엄",
         "signals": {
