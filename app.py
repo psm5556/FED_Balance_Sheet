@@ -1364,7 +1364,7 @@ def main():
         # 현재 상태 요약
         st.subheader("📍 현재 상태")
         
-        summary_cols = st.columns(7)
+        summary_cols = st.columns(8)
         
         for idx, (key, spread_info) in enumerate(SPREADS.items()):
             with summary_cols[idx]:
