@@ -457,6 +457,23 @@ SPREADS = {
             "low_stress": (float('-inf'), -0.5, "💚 낮은 스트레스")
         },
         "is_single_series": True
+    },
+    "DRTSCILM": {
+        "name": "은행 대출 기준 (SLOOS)",
+        "series": ["DRTSCILM"],
+        "multiplier": 1,
+        "threshold_min": 0,
+        "threshold_max": 20,
+        "description": "은행 대출 기준 강화 비율 (위기 선행지표)",
+        "normal_range": "0 ~ +20%",
+        "interpretation": "높을수록 은행들이 대출 기준을 강화 → 신용 경색 우려 / 낮을수록 대출 여건 개선",
+        "signals": {
+            "severe_tightening": (50, float('inf'), "🚨 극심한 대출 긴축 - 위기 임박 신호"),
+            "tightening": (20, 50, "⚠️ 대출 기준 강화 - 신용 경색 우려"),
+            "normal": (0, 20, "✅ 보통 수준"),
+            "easing": (float('-inf'), 0, "💚 대출 기준 완화")
+        },
+        "is_single_series": True
     }
 }
 
@@ -1195,6 +1212,13 @@ def main():
             - → 금융시스템 전반의 긴장도·불안 수준을 수치화  
             - → 0 이상: 평균 이상의 스트레스  
             - → 급등 구간: 금융위기·유동성 경색 국면과 높은 상관
+
+            **8. SLOOS 은행 대출 기준**: 위기 선행 지표  
+            - DRTSCILM: 상업·산업 대출 기준을 강화한 은행 순비율 (%)  
+            - → 은행들이 대출 기준을 강화하는 비율 (분기별 설문)  
+            - → 높을수록: 신용 경색 우려 증가 (위기 선행 신호)  
+            - → 낮을수록: 대출 여건 개선  
+            - → 은행이 뉴스보다 먼저 위기 신호를 감지하는 경향이 있어 중요한 선행 지표
             """)
         
         # 조회 기간 표시
