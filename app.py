@@ -173,7 +173,7 @@ SERIES_INFO = {
         "show_chart": True
     },
     "대출 (Loans)": {
-        "id": "WLCFLPCL",
+        "id": "WLCFLL",
         "highlight": False,
         "category": "자산 (Assets)",
         "description": "연준의 금융기관 대출",
@@ -1379,10 +1379,37 @@ def main():
         # 현재 상태 요약
         st.subheader("📍 현재 상태")
         
-        summary_cols = st.columns(8)
+        spreads_list = list(SPREADS.items())
         
-        for idx, (key, spread_info) in enumerate(SPREADS.items()):
-            with summary_cols[idx]:
+        # 첫 번째 줄 (0-3)
+        summary_cols_1 = st.columns(4)
+        for idx, (key, spread_info) in enumerate(spreads_list[:4]):
+            with summary_cols_1[idx]:
+                with st.spinner(f'{spread_info["name"]} 로딩 중...'):
+                    df_spread, latest_value, df_components = calculate_spread(
+                        spread_info, FRED_API_KEY, start_date, end_date
+                    )
+                    
+                    if latest_value is not None:
+                        if 'signals' in spread_info:
+                            status_msg = get_signal_status(latest_value, spread_info['signals'])
+                        else:
+                            in_range = spread_info['threshold_min'] <= latest_value <= spread_info['threshold_max']
+                            status_msg = "✅ 정상" if in_range else "⚠️ 주의"
+                        
+                        value_unit = "" if spread_info.get('is_single_series', False) else "bp"
+                        
+                        st.metric(
+                            label=spread_info['name'],
+                            value=f"{latest_value:.2f}{value_unit}",
+                            delta=status_msg.split(' - ')[0] if ' - ' in status_msg else status_msg
+                        )
+                        st.caption(spread_info['description'])
+        
+        # 두 번째 줄 (4-7)
+        summary_cols_2 = st.columns(4)
+        for idx, (key, spread_info) in enumerate(spreads_list[4:8]):
+            with summary_cols_2[idx]:
                 with st.spinner(f'{spread_info["name"]} 로딩 중...'):
                     df_spread, latest_value, df_components = calculate_spread(
                         spread_info, FRED_API_KEY, start_date, end_date
