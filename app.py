@@ -456,7 +456,8 @@ SPREADS = {
             "normal": (-0.5, 0.5, "✅ 정상 범위"),
             "low_stress": (float('-inf'), -0.5, "💚 낮은 스트레스")
         },
-        "is_single_series": True
+        "is_single_series": True,
+        "show_ma": True  # 이동평균선 표시
     },
     "DRTSCILM": {
         "name": "은행 대출 기준 (SLOOS)",
@@ -473,7 +474,8 @@ SPREADS = {
             "normal": (0, 20, "✅ 보통 수준"),
             "easing": (float('-inf'), 0, "💚 대출 기준 완화")
         },
-        "is_single_series": True
+        "is_single_series": True,
+        "show_ma": False  # 이동평균선 표시 안 함
     }
 }
 
@@ -490,7 +492,10 @@ def calculate_spread(spread_info, api_key, start_date, end_date=None):
         df = df.set_index('date')
         
         df['spread'] = df['value'] * spread_info['multiplier']
-        df['ma_4w'] = df['spread'].rolling(window=4, min_periods=1).mean()
+        
+        # show_ma가 True인 경우에만 이동평균 계산
+        if spread_info.get('show_ma', False):
+            df['ma_4w'] = df['spread'].rolling(window=4, min_periods=1).mean()
         
         latest_value = df['spread'].iloc[0] if len(df) > 0 else None  # 최신값은 첫 행
         
@@ -538,15 +543,19 @@ def create_spread_chart(df, spread_name, spread_info, latest_value):
     fig = go.Figure()
     
     if spread_info.get('is_single_series', False):
+        # 시리즈 ID를 동적으로 가져오기
+        series_id = spread_info['series'][0]
+        
         fig.add_trace(go.Scatter(
             x=df_sorted.index,
             y=df_sorted['spread'],
             mode='lines',
-            name='STLFSI4',
+            name=series_id,  # 동적으로 시리즈 ID 사용
             line=dict(color='#2E86DE', width=2)
         ))
         
-        if 'ma_4w' in df_sorted.columns:
+        # show_ma가 True이고 ma_4w 컬럼이 있는 경우에만 이동평균선 표시
+        if spread_info.get('show_ma', False) and 'ma_4w' in df_sorted.columns:
             fig.add_trace(go.Scatter(
                 x=df_sorted.index,
                 y=df_sorted['ma_4w'],
@@ -560,7 +569,7 @@ def create_spread_chart(df, spread_name, spread_info, latest_value):
             line_dash="dash",
             line_color="gray",
             opacity=0.5,
-            annotation_text="평균 수준"
+            annotation_text="평균 수준" if series_id == "STLFSI4" else "기준선"
         )
     else:
         fig.add_trace(go.Scatter(
@@ -578,7 +587,8 @@ def create_spread_chart(df, spread_name, spread_info, latest_value):
             'stress': 'red', 'severe_inversion': 'red', 'strong_recession': 'red',
             'tight': 'orange', 'abnormal': 'gray', 'loose': 'lightgreen',
             'steep': 'lightblue', 'severe_stress': 'red', 'elevated_stress': 'orange',
-            'low_stress': 'lightgreen', 'crisis': 'red', 'warning': 'orange'
+            'low_stress': 'lightgreen', 'crisis': 'red', 'warning': 'orange',
+            'severe_tightening': 'red'  # DRTSCILM용 추가
         }
         
         for signal_name, (min_val, max_val, message) in spread_info['signals'].items():
@@ -592,6 +602,10 @@ def create_spread_chart(df, spread_name, spread_info, latest_value):
                 )
     
     y_axis_title = "Index Value" if spread_info.get('is_single_series', False) else "Basis Points (bp)"
+    
+    # DRTSCILM의 경우 단위를 % (Percentage)로 표시
+    if spread_info.get('is_single_series', False) and spread_info['series'][0] == 'DRTSCILM':
+        y_axis_title = "Percentage (%)"
     
     fig.update_layout(
         title=f"{spread_name} ({spread_info['normal_range']})",
@@ -1165,6 +1179,7 @@ def main():
                 
                 start_date = start_date_input.strftime('%Y-%m-%d')
                 end_date = end_date_input.strftime('%Y-%m-%d')
+            
             st.markdown("---")
             st.markdown("### 📊 스프레드 정보")
             st.markdown("""
@@ -1212,7 +1227,7 @@ def main():
             - → 금융시스템 전반의 긴장도·불안 수준을 수치화  
             - → 0 이상: 평균 이상의 스트레스  
             - → 급등 구간: 금융위기·유동성 경색 국면과 높은 상관
-
+            
             **8. SLOOS 은행 대출 기준**: 위기 선행 지표  
             - DRTSCILM: 상업·산업 대출 기준을 강화한 은행 순비율 (%)  
             - → 은행들이 대출 기준을 강화하는 비율 (분기별 설문)  
