@@ -114,73 +114,138 @@ def fetch_fred_data(series_id, api_key, limit=10, start_date=None, end_date=None
 
 # ==================== Fear & Greed 히스토리 함수 ====================
 
+def _parse_cnn_component(data, key, y_col):
+    """CNN JSON에서 컴포넌트 데이터 파싱 헬퍼"""
+    if key in data and 'data' in data[key]:
+        df = pd.DataFrame(data[key]['data'])
+        df['date'] = pd.to_datetime(df['x'], unit='ms')
+        df = df.rename(columns={'y': y_col})[['date', y_col]].sort_values('date')
+        return df
+    return None
+
+def _score_to_rating(s):
+    """점수 → rating 문자열 변환"""
+    if s < 25:   return 'extreme fear'
+    if s < 45:   return 'fear'
+    if s < 55:   return 'neutral'
+    if s < 75:   return 'greed'
+    return 'extreme greed'
+
 @st.cache_data(ttl=1800)
 def fetch_fear_greed_full_history():
-    """CNN Fear & Greed 전체 히스토리 데이터 가져오기"""
+    """
+    CNN Fear & Greed 최대 10년+ 히스토리 데이터 가져오기
+    
+    전략:
+    ① 구형 데이터(2011~2020): Part-Time Larry GitHub CSV
+       https://raw.githubusercontent.com/hackingthemarkets/
+       sentiment-fear-and-greed/master/datasets/fear-greed.csv
+    ② 신형 데이터(2020~현재): CNN API + 시작일 파라미터
+       https://production.dataviz.cnn.io/index/fearandgreed/graphdata/YYYY-MM-DD
+    ③ 두 데이터를 merge → 중복 제거 → 최대 10년치 반환
+    """
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    result = {}
+
+    # ─────────────────────────────────────────
+    # ① 구형 데이터: GitHub CSV (2011 ~ ~2020-09)
+    # ─────────────────────────────────────────
+    df_old = None
+    OLD_CSV_URL = (
+        'https://raw.githubusercontent.com/hackingthemarkets/'
+        'sentiment-fear-and-greed/master/datasets/fear-greed.csv'
+    )
     try:
-        url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        response = requests.get(url, headers=headers, timeout=15)
-        
-        if response.status_code == 200:
-            data = response.json()
-            result = {}
+        from io import StringIO
+        r_old = requests.get(OLD_CSV_URL, headers=headers, timeout=15)
+        if r_old.status_code == 200:
+            df_old = pd.read_csv(StringIO(r_old.text))
+            # 컬럼: Date, Fear Greed
+            df_old['date']   = pd.to_datetime(df_old['Date'])
+            df_old['score']  = pd.to_numeric(df_old['Fear Greed'], errors='coerce')
+            df_old = df_old.dropna(subset=['score'])
+            df_old['rating'] = df_old['score'].apply(_score_to_rating)
+            df_old = df_old[['date', 'score', 'rating']].sort_values('date')
+    except Exception:
+        df_old = None  # CSV 실패 시 CNN만으로 진행
 
-            # 현재 F&G
-            if 'fear_and_greed' in data:
-                result['current'] = data['fear_and_greed']
+    # ─────────────────────────────────────────
+    # ② 신형 데이터: CNN API + start_date 파라미터
+    #    - df_old 가 있으면 마지막 날 다음부터 요청
+    #    - 없으면 10년 전부터 요청
+    # ─────────────────────────────────────────
+    if df_old is not None and len(df_old) > 0:
+        cnn_start = (df_old['date'].max() + timedelta(days=1)).strftime('%Y-%m-%d')
+    else:
+        cnn_start = (datetime.now() - timedelta(days=365 * 10)).strftime('%Y-%m-%d')
 
-            # F&G 히스토리
-            if 'fear_and_greed_historical' in data and 'data' in data['fear_and_greed_historical']:
-                hist = data['fear_and_greed_historical']['data']
-                df_fg = pd.DataFrame(hist)
-                df_fg['date'] = pd.to_datetime(df_fg['x'], unit='ms')
-                df_fg = df_fg.rename(columns={'y': 'score'})
-                df_fg = df_fg[['date', 'score', 'rating']].sort_values('date')
-                result['fg_history'] = df_fg
+    # 먼저 시작일 지정 URL 시도, 실패 시 날짜 없는 기본 URL fallback
+    cnn_urls = [
+        f"https://production.dataviz.cnn.io/index/fearandgreed/graphdata/{cnn_start}",
+        "https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
+    ]
 
-            # S&P 500 히스토리
-            if 'market_momentum_sp500' in data and 'data' in data['market_momentum_sp500']:
-                sp = data['market_momentum_sp500']['data']
-                df_sp = pd.DataFrame(sp)
-                df_sp['date'] = pd.to_datetime(df_sp['x'], unit='ms')
-                df_sp = df_sp.rename(columns={'y': 'price'})
-                df_sp = df_sp[['date', 'price']].sort_values('date')
-                result['sp500'] = df_sp
+    cnn_data = None
+    for cnn_url in cnn_urls:
+        try:
+            r = requests.get(cnn_url, headers=headers, timeout=15)
+            if r.status_code == 200:
+                cnn_data = r.json()
+                break
+        except Exception:
+            continue
 
-            # VIX 히스토리
-            if 'market_volatility_vix' in data and 'data' in data['market_volatility_vix']:
-                vix = data['market_volatility_vix']['data']
-                df_vix = pd.DataFrame(vix)
-                df_vix['date'] = pd.to_datetime(df_vix['x'], unit='ms')
-                df_vix = df_vix.rename(columns={'y': 'vix'})
-                df_vix = df_vix[['date', 'vix']].sort_values('date')
-                result['vix'] = df_vix
+    if cnn_data is None:
+        # CNN 완전 실패 시 구형 데이터만으로 반환
+        if df_old is not None and len(df_old) > 0:
+            result['fg_history'] = df_old
+        return result if result else None
 
-            # Put/Call 히스토리
-            if 'put_call_options' in data and 'data' in data['put_call_options']:
-                pc = data['put_call_options']['data']
-                df_pc = pd.DataFrame(pc)
-                df_pc['date'] = pd.to_datetime(df_pc['x'], unit='ms')
-                df_pc = df_pc.rename(columns={'y': 'ratio'})
-                df_pc = df_pc[['date', 'ratio']].sort_values('date')
-                result['put_call'] = df_pc
+    # 현재 F&G 값
+    if 'fear_and_greed' in cnn_data:
+        result['current'] = cnn_data['fear_and_greed']
 
-            # Junk Bond Demand
-            if 'junk_bond_demand' in data and 'data' in data['junk_bond_demand']:
-                jb = data['junk_bond_demand']['data']
-                df_jb = pd.DataFrame(jb)
-                df_jb['date'] = pd.to_datetime(df_jb['x'], unit='ms')
-                df_jb = df_jb.rename(columns={'y': 'spread'})
-                df_jb = df_jb[['date', 'spread']].sort_values('date')
-                result['junk_bond'] = df_jb
+    # CNN F&G 히스토리 파싱
+    df_new = None
+    if 'fear_and_greed_historical' in cnn_data and 'data' in cnn_data['fear_and_greed_historical']:
+        raw = cnn_data['fear_and_greed_historical']['data']
+        df_new = pd.DataFrame(raw)
+        df_new['date']   = pd.to_datetime(df_new['x'], unit='ms')
+        df_new['score']  = pd.to_numeric(df_new['y'], errors='coerce')
+        df_new['rating'] = df_new.get('rating', df_new['score'].apply(_score_to_rating))
+        df_new = df_new[['date', 'score', 'rating']].dropna(subset=['score']).sort_values('date')
 
-            return result if result else None
-    except Exception as e:
-        st.error(f"Fear & Greed 히스토리 데이터 로딩 실패: {e}")
+    # ─────────────────────────────────────────
+    # ③ 병합 (구형 + 신형) → 중복 제거
+    # ─────────────────────────────────────────
+    if df_old is not None and df_new is not None:
+        df_fg = pd.concat([df_old, df_new], ignore_index=True)
+        df_fg = df_fg.drop_duplicates(subset='date', keep='last')
+        df_fg = df_fg.sort_values('date').reset_index(drop=True)
+    elif df_new is not None:
+        df_fg = df_new
+    elif df_old is not None:
+        df_fg = df_old
+    else:
         return None
+
+    result['fg_history'] = df_fg
+
+    # 데이터 커버리지 로그 (사이드바에 표시용)
+    result['data_source_info'] = {
+        'total_days': len(df_fg),
+        'start_date': df_fg['date'].min().strftime('%Y-%m-%d'),
+        'end_date':   df_fg['date'].max().strftime('%Y-%m-%d'),
+        'has_old_csv': df_old is not None,
+    }
+
+    # 서브 컴포넌트 (CNN에서만 제공; 시작일 지정 시 더 긴 기간 포함 가능)
+    result['sp500']     = _parse_cnn_component(cnn_data, 'market_momentum_sp500',  'price')
+    result['vix']       = _parse_cnn_component(cnn_data, 'market_volatility_vix',  'vix')
+    result['put_call']  = _parse_cnn_component(cnn_data, 'put_call_options',        'ratio')
+    result['junk_bond'] = _parse_cnn_component(cnn_data, 'junk_bond_demand',        'spread')
+
+    return result
 
 def rating_to_color(rating):
     """rating 문자열을 색상으로 변환"""
@@ -1460,6 +1525,22 @@ def main():
         if df_fg is None or len(df_fg) == 0:
             st.error("Fear & Greed 히스토리 데이터가 비어있습니다.")
             st.stop()
+
+        # ── 데이터 커버리지 배너 ──
+        src_info = history_data.get('data_source_info', {})
+        if src_info:
+            start_d = src_info.get('start_date', '')
+            end_d   = src_info.get('end_date', '')
+            total   = src_info.get('total_days', len(df_fg))
+            has_old = src_info.get('has_old_csv', False)
+            years   = round((df_fg['date'].max() - df_fg['date'].min()).days / 365.25, 1)
+            src_tag = "GitHub CSV(2011~) + CNN API" if has_old else "CNN API (시작일 파라미터)"
+            st.success(
+                f"✅ **데이터 로드 완료** | "
+                f"기간: **{start_d} ~ {end_d}** ({years}년) | "
+                f"총 **{total:,}일** | "
+                f"출처: {src_tag}"
+            )
 
         # ── 현재 상태 요약 카드 ──
         current_info = history_data.get('current', {})
