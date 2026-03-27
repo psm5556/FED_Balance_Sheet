@@ -58,9 +58,9 @@ except:
 
 # ==================== 공통 함수 ====================
 
-@st.cache_data(ttl=1800)  # 30분으로 캐시 시간 단축
+@st.cache_data(ttl=1800)
 def fetch_fred_data(series_id, api_key, limit=10, start_date=None, end_date=None):
-    """FRED API에서 데이터 가져오기 - 항상 date 컬럼과 value 컬럼을 가진 DataFrame 반환"""
+    """FRED API에서 데이터 가져오기"""
     if not api_key:
         return None
     
@@ -73,13 +73,11 @@ def fetch_fred_data(series_id, api_key, limit=10, start_date=None, end_date=None
             "file_type": "json",
             "observation_start": start_date,
             "observation_end": end_date,
-            "sort_order": "desc"  # 최신 데이터 우선
+            "sort_order": "desc"
         }
     else:
-        # 날짜 범위가 지정되지 않은 경우에도 최신 데이터 확보
-        # 분기별 데이터도 고려하여 더 긴 기간 조회 (5년)
         default_end = datetime.now().strftime('%Y-%m-%d')
-        default_start = (datetime.now() - timedelta(days=1825)).strftime('%Y-%m-%d')  # 5년으로 확대
+        default_start = (datetime.now() - timedelta(days=1825)).strftime('%Y-%m-%d')
         params = {
             "series_id": series_id,
             "api_key": api_key,
@@ -96,51 +94,389 @@ def fetch_fred_data(series_id, api_key, limit=10, start_date=None, end_date=None
             data = response.json()
             if "observations" in data and len(data["observations"]) > 0:
                 df = pd.DataFrame(data["observations"])
-                
-                # date 컬럼 확인 및 변환
                 if "date" not in df.columns:
-                    st.error(f"시리즈 {series_id}: 'date' 컬럼을 찾을 수 없습니다. 사용 가능한 컬럼: {df.columns.tolist()}")
                     return None
-                
-                # 날짜 변환
                 try:
                     df["date"] = pd.to_datetime(df["date"])
-                except Exception as e:
-                    st.error(f"시리즈 {series_id}: 날짜 변환 오류 - {e}")
+                except:
                     return None
-                
-                # value 컬럼 확인 및 변환
                 if "value" not in df.columns:
-                    st.error(f"시리즈 {series_id}: 'value' 컬럼을 찾을 수 없습니다. 사용 가능한 컬럼: {df.columns.tolist()}")
                     return None
-                
                 df["value"] = pd.to_numeric(df["value"], errors="coerce")
-                
-                # 결측치 제거
                 df = df.dropna(subset=['value'])
-                
                 if len(df) == 0:
-                    st.warning(f"시리즈 {series_id}: 유효한 데이터가 없습니다.")
                     return None
-                
-                # 항상 date 컬럼을 유지하고 정렬 (최신순)
                 df = df[['date', 'value']].sort_values('date', ascending=False)
-                
                 return df
-            else:
-                st.warning(f"시리즈 {series_id}: 데이터가 비어있습니다.")
-                return None
-        else:
-            st.error(f"시리즈 {series_id}: API 요청 실패 (상태 코드: {response.status_code})")
-            return None
-    except requests.exceptions.Timeout:
-        st.error(f"시리즈 {series_id}: 요청 시간 초과")
+    except:
         return None
-    except Exception as e:
-        st.error(f"시리즈 {series_id}: 데이터 가져오기 오류 - {str(e)}")
-        return None
-    
     return None
+
+# ==================== Fear & Greed 히스토리 함수 ====================
+
+@st.cache_data(ttl=1800)
+def fetch_fear_greed_full_history():
+    """CNN Fear & Greed 전체 히스토리 데이터 가져오기"""
+    try:
+        url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=15)
+        
+        if response.status_code == 200:
+            data = response.json()
+            result = {}
+
+            # 현재 F&G
+            if 'fear_and_greed' in data:
+                result['current'] = data['fear_and_greed']
+
+            # F&G 히스토리
+            if 'fear_and_greed_historical' in data and 'data' in data['fear_and_greed_historical']:
+                hist = data['fear_and_greed_historical']['data']
+                df_fg = pd.DataFrame(hist)
+                df_fg['date'] = pd.to_datetime(df_fg['x'], unit='ms')
+                df_fg = df_fg.rename(columns={'y': 'score'})
+                df_fg = df_fg[['date', 'score', 'rating']].sort_values('date')
+                result['fg_history'] = df_fg
+
+            # S&P 500 히스토리
+            if 'market_momentum_sp500' in data and 'data' in data['market_momentum_sp500']:
+                sp = data['market_momentum_sp500']['data']
+                df_sp = pd.DataFrame(sp)
+                df_sp['date'] = pd.to_datetime(df_sp['x'], unit='ms')
+                df_sp = df_sp.rename(columns={'y': 'price'})
+                df_sp = df_sp[['date', 'price']].sort_values('date')
+                result['sp500'] = df_sp
+
+            # VIX 히스토리
+            if 'market_volatility_vix' in data and 'data' in data['market_volatility_vix']:
+                vix = data['market_volatility_vix']['data']
+                df_vix = pd.DataFrame(vix)
+                df_vix['date'] = pd.to_datetime(df_vix['x'], unit='ms')
+                df_vix = df_vix.rename(columns={'y': 'vix'})
+                df_vix = df_vix[['date', 'vix']].sort_values('date')
+                result['vix'] = df_vix
+
+            # Put/Call 히스토리
+            if 'put_call_options' in data and 'data' in data['put_call_options']:
+                pc = data['put_call_options']['data']
+                df_pc = pd.DataFrame(pc)
+                df_pc['date'] = pd.to_datetime(df_pc['x'], unit='ms')
+                df_pc = df_pc.rename(columns={'y': 'ratio'})
+                df_pc = df_pc[['date', 'ratio']].sort_values('date')
+                result['put_call'] = df_pc
+
+            # Junk Bond Demand
+            if 'junk_bond_demand' in data and 'data' in data['junk_bond_demand']:
+                jb = data['junk_bond_demand']['data']
+                df_jb = pd.DataFrame(jb)
+                df_jb['date'] = pd.to_datetime(df_jb['x'], unit='ms')
+                df_jb = df_jb.rename(columns={'y': 'spread'})
+                df_jb = df_jb[['date', 'spread']].sort_values('date')
+                result['junk_bond'] = df_jb
+
+            return result if result else None
+    except Exception as e:
+        st.error(f"Fear & Greed 히스토리 데이터 로딩 실패: {e}")
+        return None
+
+def rating_to_color(rating):
+    """rating 문자열을 색상으로 변환"""
+    mapping = {
+        'extreme fear': '#dc2626',
+        'fear': '#f97316',
+        'neutral': '#eab308',
+        'greed': '#22c55e',
+        'extreme greed': '#16a34a',
+    }
+    return mapping.get(rating.lower(), '#9ca3af')
+
+def create_fg_history_chart(df_fg, df_sp500=None):
+    """Fear & Greed 히스토리 메인 차트 (색상 구간 + S&P500 오버레이)"""
+    if df_fg is None or len(df_fg) == 0:
+        return None
+
+    if df_sp500 is not None and len(df_sp500) > 0:
+        fig = make_subplots(
+            rows=2, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.06,
+            row_heights=[0.65, 0.35],
+            subplot_titles=("Fear & Greed Index 히스토리", "S&P 500")
+        )
+    else:
+        fig = make_subplots(rows=1, cols=1)
+
+    # 배경 구간 색상
+    zones = [
+        (0, 25,   'rgba(220,38,38,0.08)',   'Extreme Fear'),
+        (25, 45,  'rgba(249,115,22,0.08)',  'Fear'),
+        (45, 55,  'rgba(234,179,8,0.08)',   'Neutral'),
+        (55, 75,  'rgba(34,197,94,0.08)',   'Greed'),
+        (75, 100, 'rgba(22,163,74,0.08)',   'Extreme Greed'),
+    ]
+    for y0, y1, color, label in zones:
+        fig.add_hrect(
+            y0=y0, y1=y1,
+            fillcolor=color,
+            line_width=0,
+            annotation_text=label,
+            annotation_position="left",
+            annotation_font_size=10,
+            annotation_font_color='rgba(200,200,200,0.5)',
+            row=1, col=1
+        )
+
+    # 기준선
+    for lvl in [25, 45, 55, 75]:
+        fig.add_hline(
+            y=lvl, line_dash="dot", line_color="rgba(150,150,150,0.3)",
+            line_width=1, row=1, col=1
+        )
+
+    # Fear & Greed 라인 (점수에 따라 색상 그라디언트 표현)
+    fig.add_trace(
+        go.Scatter(
+            x=df_fg['date'],
+            y=df_fg['score'],
+            mode='lines',
+            name='Fear & Greed Index',
+            line=dict(color='#60a5fa', width=2),
+            fill='tozeroy',
+            fillcolor='rgba(96,165,250,0.07)',
+            hovertemplate=(
+                '<b>%{x|%Y-%m-%d}</b><br>'
+                'Score: <b>%{y:.1f}</b><br>'
+                '<extra></extra>'
+            )
+        ),
+        row=1, col=1
+    )
+
+    # 최신값 마커
+    latest = df_fg.iloc[-1]
+    fig.add_trace(
+        go.Scatter(
+            x=[latest['date']],
+            y=[latest['score']],
+            mode='markers+text',
+            name=f"현재: {latest['score']:.1f}",
+            marker=dict(
+                size=12,
+                color=rating_to_color(latest['rating']),
+                symbol='circle',
+                line=dict(color='white', width=2)
+            ),
+            text=[f"  {latest['score']:.1f}"],
+            textposition='middle right',
+            textfont=dict(color='white', size=12),
+            hovertemplate='현재값: %{y:.1f}<extra></extra>'
+        ),
+        row=1, col=1
+    )
+
+    # S&P 500 오버레이
+    if df_sp500 is not None and len(df_sp500) > 0:
+        fig.add_trace(
+            go.Scatter(
+                x=df_sp500['date'],
+                y=df_sp500['price'],
+                mode='lines',
+                name='S&P 500',
+                line=dict(color='#f59e0b', width=1.5),
+                hovertemplate='<b>%{x|%Y-%m-%d}</b><br>S&P 500: %{y:,.0f}<extra></extra>'
+            ),
+            row=2, col=1
+        )
+
+    fig.update_yaxes(
+        title_text="Fear & Greed Index",
+        range=[0, 100],
+        gridcolor='rgba(75,75,75,0.3)',
+        color='white',
+        row=1, col=1
+    )
+    if df_sp500 is not None:
+        fig.update_yaxes(
+            title_text="S&P 500",
+            gridcolor='rgba(75,75,75,0.3)',
+            color='white',
+            row=2, col=1
+        )
+
+    fig.update_xaxes(
+        gridcolor='rgba(75,75,75,0.3)',
+        color='white'
+    )
+
+    fig.update_layout(
+        plot_bgcolor='#0e1117',
+        paper_bgcolor='#0e1117',
+        font=dict(color='white'),
+        hovermode='x unified',
+        height=650 if df_sp500 is not None else 450,
+        showlegend=True,
+        legend=dict(
+            orientation='h',
+            yanchor='bottom', y=1.01,
+            xanchor='right', x=1,
+            font=dict(color='white')
+        ),
+        margin=dict(l=60, r=60, t=60, b=40)
+    )
+
+    return fig
+
+
+def create_fg_sub_indicators_chart(history_data):
+    """F&G 세부 구성 지표 차트 (VIX, Put/Call, Junk Bond)"""
+    df_vix = history_data.get('vix')
+    df_pc = history_data.get('put_call')
+    df_jb = history_data.get('junk_bond')
+
+    available = [(df_vix, 'VIX 변동성 지수', '#ef4444'),
+                 (df_pc, 'Put/Call Ratio', '#a78bfa'),
+                 (df_jb, 'Junk Bond Spread', '#34d399')]
+    available = [(df, name, color) for df, name, color in available if df is not None and len(df) > 0]
+
+    if not available:
+        return None
+
+    n = len(available)
+    fig = make_subplots(
+        rows=n, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.06,
+        subplot_titles=[name for _, name, _ in available]
+    )
+
+    col_map = {'VIX 변동성 지수': 'vix', 'Put/Call Ratio': 'ratio', 'Junk Bond Spread': 'spread'}
+
+    for i, (df, name, color) in enumerate(available, 1):
+        ycol = col_map[name]
+        fig.add_trace(
+            go.Scatter(
+                x=df['date'],
+                y=df[ycol],
+                mode='lines',
+                name=name,
+                line=dict(color=color, width=1.5),
+                hovertemplate=f'<b>%{{x|%Y-%m-%d}}</b><br>{name}: %{{y:.3f}}<extra></extra>'
+            ),
+            row=i, col=1
+        )
+        fig.update_yaxes(
+            gridcolor='rgba(75,75,75,0.3)',
+            color='white',
+            row=i, col=1
+        )
+
+    fig.update_xaxes(gridcolor='rgba(75,75,75,0.3)', color='white')
+    fig.update_layout(
+        plot_bgcolor='#0e1117',
+        paper_bgcolor='#0e1117',
+        font=dict(color='white'),
+        hovermode='x unified',
+        height=150 * n + 80,
+        showlegend=False,
+        margin=dict(l=60, r=60, t=40, b=40)
+    )
+    return fig
+
+
+def create_fg_distribution_chart(df_fg):
+    """Fear & Greed 구간별 비율 파이/바 차트"""
+    if df_fg is None or len(df_fg) == 0:
+        return None
+
+    rating_order = ['extreme fear', 'fear', 'neutral', 'greed', 'extreme greed']
+    rating_labels = ['Extreme Fear', 'Fear', 'Neutral', 'Greed', 'Extreme Greed']
+    rating_colors = ['#dc2626', '#f97316', '#eab308', '#22c55e', '#16a34a']
+
+    counts = df_fg['rating'].str.lower().value_counts()
+    values = [counts.get(r, 0) for r in rating_order]
+    total = sum(values)
+    pcts = [v / total * 100 if total > 0 else 0 for v in values]
+
+    fig = go.Figure(go.Bar(
+        x=rating_labels,
+        y=pcts,
+        marker_color=rating_colors,
+        text=[f'{p:.1f}%' for p in pcts],
+        textposition='outside',
+        textfont=dict(color='white', size=12),
+        hovertemplate='%{x}<br>비율: %{y:.1f}%<br>일수: %{customdata}일<extra></extra>',
+        customdata=values
+    ))
+
+    fig.update_layout(
+        title=dict(text='구간별 출현 비율', font=dict(color='white', size=15)),
+        xaxis=dict(color='white', gridcolor='rgba(75,75,75,0.3)'),
+        yaxis=dict(title='비율 (%)', color='white', gridcolor='rgba(75,75,75,0.3)'),
+        plot_bgcolor='#0e1117',
+        paper_bgcolor='#0e1117',
+        font=dict(color='white'),
+        height=320,
+        margin=dict(l=50, r=30, t=50, b=40)
+    )
+    return fig
+
+
+def create_fg_rolling_chart(df_fg):
+    """Fear & Greed 이동평균 차트"""
+    if df_fg is None or len(df_fg) < 10:
+        return None
+
+    df = df_fg.copy().sort_values('date')
+    df['ma_20'] = df['score'].rolling(20, min_periods=1).mean()
+    df['ma_60'] = df['score'].rolling(60, min_periods=1).mean()
+
+    fig = go.Figure()
+
+    fig.add_hrect(y0=0,  y1=25,  fillcolor='rgba(220,38,38,0.06)',  line_width=0)
+    fig.add_hrect(y0=25, y1=45,  fillcolor='rgba(249,115,22,0.06)', line_width=0)
+    fig.add_hrect(y0=45, y1=55,  fillcolor='rgba(234,179,8,0.06)',  line_width=0)
+    fig.add_hrect(y0=55, y1=75,  fillcolor='rgba(34,197,94,0.06)',  line_width=0)
+    fig.add_hrect(y0=75, y1=100, fillcolor='rgba(22,163,74,0.06)',  line_width=0)
+
+    fig.add_trace(go.Scatter(
+        x=df['date'], y=df['score'],
+        mode='lines', name='Daily Score',
+        line=dict(color='rgba(96,165,250,0.4)', width=1),
+        hovertemplate='<b>%{x|%Y-%m-%d}</b><br>Score: %{y:.1f}<extra></extra>'
+    ))
+    fig.add_trace(go.Scatter(
+        x=df['date'], y=df['ma_20'],
+        mode='lines', name='20일 이동평균',
+        line=dict(color='#f59e0b', width=2),
+        hovertemplate='20MA: %{y:.1f}<extra></extra>'
+    ))
+    fig.add_trace(go.Scatter(
+        x=df['date'], y=df['ma_60'],
+        mode='lines', name='60일 이동평균',
+        line=dict(color='#f87171', width=2),
+        hovertemplate='60MA: %{y:.1f}<extra></extra>'
+    ))
+
+    fig.add_hline(y=50, line_dash='dash', line_color='rgba(255,255,255,0.3)', line_width=1)
+
+    fig.update_layout(
+        title=dict(text='이동평균 트렌드', font=dict(color='white', size=15)),
+        xaxis=dict(color='white', gridcolor='rgba(75,75,75,0.3)'),
+        yaxis=dict(title='Score', range=[0, 100], color='white', gridcolor='rgba(75,75,75,0.3)'),
+        plot_bgcolor='#0e1117',
+        paper_bgcolor='#0e1117',
+        font=dict(color='white'),
+        hovermode='x unified',
+        height=380,
+        showlegend=True,
+        legend=dict(orientation='h', y=1.02, x=1, xanchor='right', font=dict(color='white')),
+        margin=dict(l=60, r=60, t=50, b=40)
+    )
+    return fig
+
 
 # ==================== 대차대조표 관련 ====================
 
@@ -266,16 +602,13 @@ SERIES_INFO = {
 }
 
 def format_number(value):
-    """숫자를 $M 단위로 포맷"""
     if pd.isna(value):
         return "N/A"
     return f"{value:,.0f}"
 
 def format_change(change):
-    """변화량을 화살표와 함께 포맷"""
     if pd.isna(change):
         return "N/A"
-    
     if change > 0:
         return f"▲ {abs(change):,.0f}"
     elif change < 0:
@@ -284,33 +617,20 @@ def format_change(change):
         return f"{change:,.0f}"
 
 def get_fred_link(series_id):
-    """FRED 시리즈 링크 생성"""
     return f"https://fred.stlouisfed.org/series/{series_id}"
 
 def create_balance_sheet_chart(df, title, series_id):
-    """대차대조표 차트 생성"""
     if df is None or len(df) == 0:
         return None
-    
-    # DataFrame을 복사하여 작업
     df_work = df.copy()
-    
-    # 인덱스가 DatetimeIndex인 경우 리셋
     if isinstance(df_work.index, pd.DatetimeIndex):
         df_work = df_work.reset_index()
         if 'index' in df_work.columns:
             df_work = df_work.rename(columns={'index': 'date'})
-    
-    # date 컬럼이 있는지 확인
     if 'date' not in df_work.columns:
-        # date 컬럼이 없으면 인덱스를 date로 사용
         df_work['date'] = df_work.index
-    
-    # 정렬 (시간순)
     df_sorted = df_work.sort_values('date')
-    
     fig = go.Figure()
-    
     fig.add_trace(go.Scatter(
         x=df_sorted['date'],
         y=df_sorted['value'],
@@ -320,29 +640,16 @@ def create_balance_sheet_chart(df, title, series_id):
         marker=dict(size=6, color='#64b5f6'),
         hovertemplate='<b>%{x|%Y-%m-%d}</b><br>값: $%{y:,.0f}M<extra></extra>'
     ))
-    
     fig.update_layout(
-        title=dict(
-            text=f"{title} - 최근 추이",
-            font=dict(size=18, color='white')
-        ),
-        xaxis=dict(
-            title="날짜",
-            gridcolor='#2d2d2d',
-            color='white'
-        ),
-        yaxis=dict(
-            title="금액 ($M)",
-            gridcolor='#2d2d2d',
-            color='white'
-        ),
+        title=dict(text=f"{title} - 최근 추이", font=dict(size=18, color='white')),
+        xaxis=dict(title="날짜", gridcolor='#2d2d2d', color='white'),
+        yaxis=dict(title="금액 ($M)", gridcolor='#2d2d2d', color='white'),
         plot_bgcolor='#0e1117',
         paper_bgcolor='#0e1117',
         font=dict(color='white'),
         hovermode='x unified',
         height=400
     )
-    
     return fig
 
 # ==================== 금리 스프레드 관련 ====================
@@ -457,7 +764,7 @@ SPREADS = {
             "low_stress": (float('-inf'), -0.5, "💚 낮은 스트레스")
         },
         "is_single_series": True,
-        "show_ma": True  # 이동평균선 표시
+        "show_ma": True
     },
     "DRTSCILM": {
         "name": "은행 대출 기준 (SLOOS)",
@@ -475,111 +782,71 @@ SPREADS = {
             "easing": (float('-inf'), 0, "💚 대출 기준 완화")
         },
         "is_single_series": True,
-        "show_ma": False  # 이동평균선 표시 안 함
+        "show_ma": False
     }
 }
 
 def calculate_spread(spread_info, api_key, start_date, end_date=None):
-    """스프레드 계산"""
     if spread_info.get('is_single_series', False):
         series_id = spread_info['series'][0]
         df = fetch_fred_data(series_id, api_key, limit=None, start_date=start_date, end_date=end_date)
-        
         if df is None:
             return None, None, None
-        
-        # date를 인덱스로 설정
         df = df.set_index('date')
-        
         df['spread'] = df['value'] * spread_info['multiplier']
-        
-        # show_ma가 True인 경우에만 이동평균 계산
         if spread_info.get('show_ma', False):
             df['ma_4w'] = df['spread'].rolling(window=4, min_periods=1).mean()
-        
-        latest_value = df['spread'].iloc[0] if len(df) > 0 else None  # 최신값은 첫 행
-        
+        latest_value = df['spread'].iloc[0] if len(df) > 0 else None
         df_components = df[['value']].copy()
         df_components.columns = [series_id]
-        
         return df, latest_value, df_components
-    
+
     series1_id, series2_id = spread_info['series']
-    
     df1 = fetch_fred_data(series1_id, api_key, limit=None, start_date=start_date, end_date=end_date)
     df2 = fetch_fred_data(series2_id, api_key, limit=None, start_date=start_date, end_date=end_date)
-    
     if df1 is None or df2 is None:
         return None, None, None
-    
-    # date를 인덱스로 설정
     df1 = df1.set_index('date')
     df2 = df2.set_index('date')
-    
-    # 두 데이터프레임 병합
     df = df1.join(df2, how='outer', rsuffix='_2')
     df.columns = [series1_id, series2_id]
     df = df.ffill().dropna()
-    df = df.sort_index(ascending=False)  # 최신순 정렬
-    
+    df = df.sort_index(ascending=False)
     df['spread'] = (df[series1_id] - df[series2_id]) * spread_info['multiplier']
-    
-    latest_value = df['spread'].iloc[0] if len(df) > 0 else None  # 최신값은 첫 행
-    
+    latest_value = df['spread'].iloc[0] if len(df) > 0 else None
     return df, latest_value, df[[series1_id, series2_id]]
 
 def get_signal_status(value, signals):
-    """신호 기반 상태 판단"""
     for signal_name, (min_val, max_val, message) in signals.items():
         if min_val <= value < max_val:
             return message
     return "📊 데이터 확인 필요"
 
 def create_spread_chart(df, spread_name, spread_info, latest_value):
-    """스프레드 차트 생성"""
-    # 시간순 정렬을 위해 복사본 생성
     df_sorted = df.sort_index(ascending=True)
-    
     fig = go.Figure()
-    
     if spread_info.get('is_single_series', False):
-        # 시리즈 ID를 동적으로 가져오기
         series_id = spread_info['series'][0]
-        
         fig.add_trace(go.Scatter(
-            x=df_sorted.index,
-            y=df_sorted['spread'],
-            mode='lines',
-            name=series_id,  # 동적으로 시리즈 ID 사용
+            x=df_sorted.index, y=df_sorted['spread'],
+            mode='lines', name=series_id,
             line=dict(color='#2E86DE', width=2)
         ))
-        
-        # show_ma가 True이고 ma_4w 컬럼이 있는 경우에만 이동평균선 표시
         if spread_info.get('show_ma', False) and 'ma_4w' in df_sorted.columns:
             fig.add_trace(go.Scatter(
-                x=df_sorted.index,
-                y=df_sorted['ma_4w'],
-                mode='lines',
-                name='4주 이동평균',
+                x=df_sorted.index, y=df_sorted['ma_4w'],
+                mode='lines', name='4주 이동평균',
                 line=dict(color='#FF6B6B', width=2, dash='dash')
             ))
-        
-        fig.add_hline(
-            y=0,
-            line_dash="dash",
-            line_color="gray",
-            opacity=0.5,
-            annotation_text="평균 수준" if series_id == "STLFSI4" else "기준선"
-        )
+        fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5,
+                      annotation_text="평균 수준" if series_id == "STLFSI4" else "기준선")
     else:
         fig.add_trace(go.Scatter(
-            x=df_sorted.index,
-            y=df_sorted['spread'],
-            mode='lines',
-            name='Spread',
+            x=df_sorted.index, y=df_sorted['spread'],
+            mode='lines', name='Spread',
             line=dict(color='#2E86DE', width=2)
         ))
-    
+
     if 'signals' in spread_info:
         colors_map = {
             'normal': 'green', 'neutral': 'green', 'mild_inversion': 'orange',
@@ -588,9 +855,8 @@ def create_spread_chart(df, spread_name, spread_info, latest_value):
             'tight': 'orange', 'abnormal': 'gray', 'loose': 'lightgreen',
             'steep': 'lightblue', 'severe_stress': 'red', 'elevated_stress': 'orange',
             'low_stress': 'lightgreen', 'crisis': 'red', 'warning': 'orange',
-            'severe_tightening': 'red'  # DRTSCILM용 추가
+            'severe_tightening': 'red'
         }
-        
         for signal_name, (min_val, max_val, message) in spread_info['signals'].items():
             if min_val != float('-inf') and max_val != float('inf'):
                 color = colors_map.get(signal_name, 'gray')
@@ -600,260 +866,137 @@ def create_spread_chart(df, spread_name, spread_info, latest_value):
                     annotation_text=message.split(' - ')[0] if ' - ' in message else message,
                     annotation_position="left"
                 )
-    
+
     y_axis_title = "Index Value" if spread_info.get('is_single_series', False) else "Basis Points (bp)"
-    
-    # DRTSCILM의 경우 단위를 % (Percentage)로 표시
     if spread_info.get('is_single_series', False) and spread_info['series'][0] == 'DRTSCILM':
         y_axis_title = "Percentage (%)"
-    
+
     fig.update_layout(
         title=f"{spread_name} ({spread_info['normal_range']})",
-        xaxis_title="날짜",
-        yaxis_title=y_axis_title,
-        hovermode='x unified',
-        height=400,
-        showlegend=True
+        xaxis_title="날짜", yaxis_title=y_axis_title,
+        hovermode='x unified', height=400, showlegend=True
     )
-    
     return fig
 
 def create_components_chart(df_components, series_ids):
-    """구성 요소 차트 생성"""
-    # 시간순 정렬
     df_sorted = df_components.sort_index(ascending=True)
-    
     fig = go.Figure()
-    
     colors = ['#EE5A6F', '#4ECDC4']
     for i, series in enumerate(series_ids):
         fig.add_trace(go.Scatter(
-            x=df_sorted.index,
-            y=df_sorted[series],
-            mode='lines',
-            name=series,
+            x=df_sorted.index, y=df_sorted[series],
+            mode='lines', name=series,
             line=dict(color=colors[i], width=2)
         ))
-    
     fig.update_layout(
-        title="구성 요소",
-        xaxis_title="날짜",
-        yaxis_title="Rate (%)",
-        hovermode='x unified',
-        height=300,
-        showlegend=True
+        title="구성 요소", xaxis_title="날짜", yaxis_title="Rate (%)",
+        hovermode='x unified', height=300, showlegend=True
     )
-    
     return fig
 
 def get_fear_greed_index():
-    """CNN Fear & Greed Index 가져오기"""
     try:
-        # 방법 1: CNN API (새 엔드포인트)
         url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers, timeout=10)
-        
         if response.status_code == 200:
             data = response.json()
-            
             if 'fear_and_greed' in data:
                 score = float(data['fear_and_greed']['score'])
                 rating = data['fear_and_greed']['rating']
-                
-                # 상태에 따른 색상 및 이모지 설정
                 if score >= 75:
-                    status = "Extreme Greed"
-                    color = "#16a34a"
-                    emoji = "🤑"
+                    status, color, emoji = "Extreme Greed", "#16a34a", "🤑"
                 elif score >= 55:
-                    status = "Greed"
-                    color = "#22c55e"
-                    emoji = "😊"
+                    status, color, emoji = "Greed", "#22c55e", "😊"
                 elif score >= 45:
-                    status = "Neutral"
-                    color = "#eab308"
-                    emoji = "😐"
+                    status, color, emoji = "Neutral", "#eab308", "😐"
                 elif score >= 25:
-                    status = "Fear"
-                    color = "#f97316"
-                    emoji = "😨"
+                    status, color, emoji = "Fear", "#f97316", "😨"
                 else:
-                    status = "Extreme Fear"
-                    color = "#dc2626"
-                    emoji = "😱"
-                
-                return {
-                    "score": score,
-                    "status": status,
-                    "rating": rating,
-                    "color": color,
-                    "emoji": emoji,
-                    "source": "CNN API"
-                }
-    except Exception as e:
+                    status, color, emoji = "Extreme Fear", "#dc2626", "😱"
+                return {"score": score, "status": status, "rating": rating,
+                        "color": color, "emoji": emoji, "source": "CNN API"}
+    except:
         pass
-    
+
     try:
-        # 방법 2: Alternative Fear and Greed API
         url = "https://api.alternative.me/fng/?limit=1"
         response = requests.get(url, timeout=10)
-        
         if response.status_code == 200:
             data = response.json()
-            
             if 'data' in data and len(data['data']) > 0:
                 score = float(data['data'][0]['value'])
-                
-                # 상태 판단
                 if score >= 75:
-                    status = "Extreme Greed"
-                    color = "#16a34a"
-                    emoji = "🤑"
+                    status, color, emoji = "Extreme Greed", "#16a34a", "🤑"
                 elif score >= 55:
-                    status = "Greed"
-                    color = "#22c55e"
-                    emoji = "😊"
+                    status, color, emoji = "Greed", "#22c55e", "😊"
                 elif score >= 45:
-                    status = "Neutral"
-                    color = "#eab308"
-                    emoji = "😐"
+                    status, color, emoji = "Neutral", "#eab308", "😐"
                 elif score >= 25:
-                    status = "Fear"
-                    color = "#f97316"
-                    emoji = "😨"
+                    status, color, emoji = "Fear", "#f97316", "😨"
                 else:
-                    status = "Extreme Fear"
-                    color = "#dc2626"
-                    emoji = "😱"
-                
-                return {
-                    "score": score,
-                    "status": status,
-                    "rating": data['data'][0]['value_classification'],
-                    "color": color,
-                    "emoji": emoji,
-                    "source": "Crypto F&G (참고용)"
-                }
-    except Exception as e:
+                    status, color, emoji = "Extreme Fear", "#dc2626", "😱"
+                return {"score": score, "status": status,
+                        "rating": data['data'][0]['value_classification'],
+                        "color": color, "emoji": emoji, "source": "Crypto F&G (참고용)"}
+    except:
         pass
-    
-    # 방법 3: VIX 기반 계산
+
     try:
         df_vix = fetch_fred_data("VIXCLS", FRED_API_KEY, limit=1)
-        
         if df_vix is not None and len(df_vix) > 0:
             vix_value = float(df_vix.iloc[0]["value"])
-            
-            # VIX 기반 Fear & Greed 점수 계산 (역관계)
-            # VIX가 낮을수록 탐욕, 높을수록 공포
-            if vix_value <= 12:
-                score = 85
-            elif vix_value <= 15:
-                score = 75
-            elif vix_value <= 20:
-                score = 60
-            elif vix_value <= 25:
-                score = 50
-            elif vix_value <= 30:
-                score = 40
-            elif vix_value <= 35:
-                score = 30
-            elif vix_value <= 40:
-                score = 20
-            else:
-                score = 10
-            
-            # 상태 판단
+            if vix_value <= 12: score = 85
+            elif vix_value <= 15: score = 75
+            elif vix_value <= 20: score = 60
+            elif vix_value <= 25: score = 50
+            elif vix_value <= 30: score = 40
+            elif vix_value <= 35: score = 30
+            elif vix_value <= 40: score = 20
+            else: score = 10
             if score >= 75:
-                status = "Extreme Greed"
-                color = "#16a34a"
-                emoji = "🤑"
+                status, color, emoji = "Extreme Greed", "#16a34a", "🤑"
             elif score >= 55:
-                status = "Greed"
-                color = "#22c55e"
-                emoji = "😊"
+                status, color, emoji = "Greed", "#22c55e", "😊"
             elif score >= 45:
-                status = "Neutral"
-                color = "#eab308"
-                emoji = "😐"
+                status, color, emoji = "Neutral", "#eab308", "😐"
             elif score >= 25:
-                status = "Fear"
-                color = "#f97316"
-                emoji = "😨"
+                status, color, emoji = "Fear", "#f97316", "😨"
             else:
-                status = "Extreme Fear"
-                color = "#dc2626"
-                emoji = "😱"
-            
-            return {
-                "score": score,
-                "status": status,
-                "rating": f"VIX 기반 추정 (VIX: {vix_value:.2f})",
-                "color": color,
-                "emoji": emoji,
-                "source": "VIX 기반 계산"
-            }
+                status, color, emoji = "Extreme Fear", "#dc2626", "😱"
+            return {"score": score, "status": status,
+                    "rating": f"VIX 기반 추정 (VIX: {vix_value:.2f})",
+                    "color": color, "emoji": emoji, "source": "VIX 기반 계산"}
     except Exception as e:
         st.error(f"모든 Fear & Greed 데이터 소스 실패: {e}")
-    
     return None
 
 def get_vix_index():
-    """VIX 지수 가져오기"""
     try:
         df_vix = fetch_fred_data("VIXCLS", FRED_API_KEY, limit=1)
-        
         if df_vix is not None and len(df_vix) > 0:
             vix_value = float(df_vix.iloc[0]["value"])
-            
-            # VIX 수준 판단
             if vix_value < 12:
-                status = "매우 낮음"
-                color = "#16a34a"
-                emoji = "😌"
-                description = "시장 매우 안정"
+                status, color, emoji, description = "매우 낮음", "#16a34a", "😌", "시장 매우 안정"
             elif vix_value < 20:
-                status = "낮음"
-                color = "#22c55e"
-                emoji = "🙂"
-                description = "시장 안정"
+                status, color, emoji, description = "낮음", "#22c55e", "🙂", "시장 안정"
             elif vix_value < 30:
-                status = "보통"
-                color = "#eab308"
-                emoji = "😐"
-                description = "변동성 증가"
+                status, color, emoji, description = "보통", "#eab308", "😐", "변동성 증가"
             elif vix_value < 40:
-                status = "높음"
-                color = "#f97316"
-                emoji = "😰"
-                description = "시장 불안"
+                status, color, emoji, description = "높음", "#f97316", "😰", "시장 불안"
             else:
-                status = "매우 높음"
-                color = "#dc2626"
-                emoji = "🚨"
-                description = "극심한 불안"
-            
-            return {
-                "value": vix_value,
-                "status": status,
-                "color": color,
-                "emoji": emoji,
-                "description": description
-            }
+                status, color, emoji, description = "매우 높음", "#dc2626", "🚨", "극심한 불안"
+            return {"value": vix_value, "status": status, "color": color,
+                    "emoji": emoji, "description": description}
     except Exception as e:
         st.error(f"VIX 데이터 로딩 실패: {e}")
-    
     return None
 
 # ==================== 메인 앱 ====================
 
 def main():
     st.title("📊 Fed 모니터링 통합 대시보드")
-    
-    # 캐시 초기화 버튼 추가
+
     col1, col2 = st.columns([6, 1])
     with col1:
         st.caption(f"마지막 업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -861,10 +1004,9 @@ def main():
         if st.button("🔄 새로고침"):
             st.cache_data.clear()
             st.rerun()
-    
-    # API 키 확인
+
     if not FRED_API_KEY:
-        st.warning("⚠️ FRED API 키가 설정되지 않았습니다. GitHub Secrets 또는 Streamlit Secrets에 FRED_API_KEY를 추가해주세요.")
+        st.warning("⚠️ FRED API 키가 설정되지 않았습니다.")
         st.info("""
         **FRED API 키 발급:**
         https://fred.stlouisfed.org/docs/api/api_key.html 에서 무료로 발급받을 수 있습니다.
@@ -875,71 +1017,46 @@ def main():
         3. `FRED_API_KEY = "your_api_key_here"` 형식으로 입력
         """)
         return
-    
-    # 메인 탭 생성
-    tab1, tab2 = st.tabs(["💰 Fed Balance Sheet", "📈 금리 스프레드"])
-    
+
+    # 메인 탭 생성 (tab3 추가)
+    tab1, tab2, tab3 = st.tabs([
+        "💰 Fed Balance Sheet",
+        "📈 금리 스프레드",
+        "😨 Fear & Greed 히스토리"
+    ])
+
     # ==================== Tab 1: Fed Balance Sheet ====================
     with tab1:
         st.header("Fed Balance Sheet: Weekly Changes (Unit: $M)")
-        
-        # 사이드바 설정 (Balance Sheet용)
+
         with st.sidebar:
             st.markdown("### 📅 조회 기간 설정 (Balance Sheet)")
-            
-            bs_date_mode = st.radio(
-                "기간 선택 방식",
-                ["빠른 선택", "직접 입력"],
-                index=0,
-                key="bs_date_mode"
-            )
-            
+            bs_date_mode = st.radio("기간 선택 방식", ["빠른 선택", "직접 입력"], index=0, key="bs_date_mode")
             if bs_date_mode == "빠른 선택":
-                bs_period = st.selectbox(
-                    "조회 기간",
-                    ["1개월", "3개월", "6개월", "1년", "2년", "5년"],
-                    index=3,
-                    key="bs_period"
-                )
-                
-                bs_period_map = {
-                    "1개월": 30, "3개월": 90, "6개월": 180, 
-                    "1년": 365, "2년": 730, "5년": 1825
-                }
-                
+                bs_period = st.selectbox("조회 기간",
+                    ["1개월", "3개월", "6개월", "1년", "2년", "5년"], index=3, key="bs_period")
+                bs_period_map = {"1개월": 30, "3개월": 90, "6개월": 180, "1년": 365, "2년": 730, "5년": 1825}
                 bs_days = bs_period_map[bs_period]
                 bs_start_date = (datetime.now() - timedelta(days=bs_days)).strftime('%Y-%m-%d')
                 bs_end_date = datetime.now().strftime('%Y-%m-%d')
-                
             else:
                 col1, col2 = st.columns(2)
-                
                 with col1:
-                    bs_start_date_input = st.date_input(
-                        "시작 날짜",
+                    bs_start_date_input = st.date_input("시작 날짜",
                         value=datetime.now() - timedelta(days=365),
-                        max_value=datetime.now(),
-                        key="bs_start"
-                    )
-                
+                        max_value=datetime.now(), key="bs_start")
                 with col2:
-                    bs_end_date_input = st.date_input(
-                        "종료 날짜",
-                        value=datetime.now(),
-                        max_value=datetime.now(),
-                        key="bs_end"
-                    )
-                
+                    bs_end_date_input = st.date_input("종료 날짜",
+                        value=datetime.now(), max_value=datetime.now(), key="bs_end")
                 bs_start_date = bs_start_date_input.strftime('%Y-%m-%d')
                 bs_end_date = bs_end_date_input.strftime('%Y-%m-%d')
-        
-        # 조회 기간 표시
+
         st.info(f"📅 **조회 기간**: {bs_start_date} ~ {bs_end_date}")
-        
+
         with st.spinner("데이터를 불러오는 중..."):
             data_list = []
             chart_data = {}
-            
+
             for name, info in SERIES_INFO.items():
                 series_id = info["id"]
                 highlight = info["highlight"]
@@ -949,31 +1066,24 @@ def main():
                 order = info["order"]
                 show_chart = info.get("show_chart", False)
                 is_quarterly = info.get("is_quarterly", False)
-                
-                # 표용 데이터 - 최신 10개 데이터 가져오기
+
                 df = fetch_fred_data(series_id, FRED_API_KEY, limit=10)
-                
+
                 if show_chart:
-                    # 차트용 데이터는 설정된 조회기간 사용
-                    df_chart = fetch_fred_data(series_id, FRED_API_KEY, limit=None, 
+                    df_chart = fetch_fred_data(series_id, FRED_API_KEY, limit=None,
                                                start_date=bs_start_date, end_date=bs_end_date)
                     chart_data[name] = {"df": df_chart, "series_id": series_id}
-                
+
                 if df is not None and len(df) >= 2:
-                    # 최신 데이터가 첫 번째 행
                     current_value = df.iloc[0]["value"]
                     previous_value = df.iloc[1]["value"]
                     change = current_value - previous_value
                     current_date = df.iloc[0]["date"]
                     previous_date = df.iloc[1]["date"]
-                    
-                    # 분기별 데이터 표시
+
                     display_name = name
                     if is_quarterly:
                         display_name = f"{name} 🔶"
-                        current_date_str = current_date.strftime('%Y-Q%q')
-                        previous_date_str = previous_date.strftime('%Y-Q%q')
-                        # 분기 표시를 위한 계산
                         current_quarter = (current_date.month - 1) // 3 + 1
                         previous_quarter = (previous_date.month - 1) // 3 + 1
                         current_date_str = f"{current_date.year}-Q{current_quarter}"
@@ -981,96 +1091,58 @@ def main():
                     else:
                         current_date_str = current_date.strftime('%Y-%m-%d')
                         previous_date_str = previous_date.strftime('%Y-%m-%d')
-                    
+
                     data_list.append({
-                        "분류": category,
-                        "항목": display_name,
-                        "설명": description,
-                        "현재 값": format_number(current_value),
-                        "이전 값": format_number(previous_value),
-                        "변화": format_change(change),
-                        "유동성 영향": liquidity_impact,
+                        "분류": category, "항목": display_name, "설명": description,
+                        "현재 값": format_number(current_value), "이전 값": format_number(previous_value),
+                        "변화": format_change(change), "유동성 영향": liquidity_impact,
                         "출처": f'<a href="{get_fred_link(series_id)}" target="_blank">🔗 {series_id}</a>',
-                        "하이라이트": highlight,
-                        "변화_수치": change,
-                        "순서": order,
-                        "현재_날짜": current_date_str,
-                        "이전_날짜": previous_date_str
+                        "하이라이트": highlight, "변화_수치": change, "순서": order,
+                        "현재_날짜": current_date_str, "이전_날짜": previous_date_str
                     })
                 else:
-                    display_name = name
-                    if is_quarterly:
-                        display_name = f"{name} 🔶"
-                    
+                    display_name = f"{name} 🔶" if is_quarterly else name
                     data_list.append({
-                        "분류": category,
-                        "항목": display_name,
-                        "설명": description,
-                        "현재 값": "N/A",
-                        "이전 값": "N/A",
-                        "변화": "N/A",
+                        "분류": category, "항목": display_name, "설명": description,
+                        "현재 값": "N/A", "이전 값": "N/A", "변화": "N/A",
                         "유동성 영향": liquidity_impact,
                         "출처": f'<a href="{get_fred_link(series_id)}" target="_blank">🔗 {series_id}</a>',
-                        "하이라이트": highlight,
-                        "변화_수치": 0,
-                        "순서": order,
-                        "현재_날짜": "N/A",
-                        "이전_날짜": "N/A"
+                        "하이라이트": highlight, "변화_수치": 0, "순서": order,
+                        "현재_날짜": "N/A", "이전_날짜": "N/A"
                     })
-        
+
         if data_list:
             df_display = pd.DataFrame(data_list)
             df_display = df_display.sort_values(by=["순서"])
-            
-            # 데이터 업데이트 안내
+
             if "현재_날짜" in df_display.columns and df_display["현재_날짜"].iloc[0] != "N/A":
-                st.info(f"ℹ️ **데이터 기준**: 대부분의 항목이 {df_display['현재_날짜'].iloc[0]} 기준으로 업데이트되었습니다. (각 항목의 정확한 날짜는 표의 날짜 칼럼 참조)")
-            
+                st.info(f"ℹ️ **데이터 기준**: {df_display['현재_날짜'].iloc[0]} 기준")
+
             st.markdown("### 📊 Fed Balance Sheet 데이터")
-            st.caption("🔶 = 분기별 업데이트 항목 (다른 항목은 주간 업데이트)")
-            
-            # HTML 테이블
+            st.caption("🔶 = 분기별 업데이트 항목")
+
             html_table = "<table style='width:100%; border-collapse: collapse;'>"
             html_table += "<thead><tr style='background-color: #2d2d2d;'>"
-            html_table += "<th style='padding: 12px; text-align: left; color: white; width: 6%;'>분류</th>"
-            html_table += "<th style='padding: 12px; text-align: left; color: white; width: 14%;'>항목</th>"
-            html_table += "<th style='padding: 12px; text-align: left; color: white; width: 12%;'>설명</th>"
-            html_table += "<th style='padding: 12px; text-align: center; color: white; width: 8%;'>현재 날짜</th>"
-            html_table += "<th style='padding: 12px; text-align: right; color: white; width: 10%;'>현재 값</th>"
-            html_table += "<th style='padding: 12px; text-align: center; color: white; width: 8%;'>이전 날짜</th>"
-            html_table += "<th style='padding: 12px; text-align: right; color: white; width: 10%;'>이전 값</th>"
-            html_table += "<th style='padding: 12px; text-align: right; color: white; width: 10%;'>변화</th>"
-            html_table += "<th style='padding: 12px; text-align: left; color: white; width: 14%;'>유동성 영향</th>"
-            html_table += "<th style='padding: 12px; text-align: center; color: white; width: 8%;'>출처</th>"
+            for h in ["분류", "항목", "설명", "현재 날짜", "현재 값", "이전 날짜", "이전 값", "변화", "유동성 영향", "출처"]:
+                html_table += f"<th style='padding: 12px; text-align: left; color: white;'>{h}</th>"
             html_table += "</tr></thead><tbody>"
-            
+
             current_category = None
             for _, row in df_display.iterrows():
                 bg_color = "#3d3d00" if row["하이라이트"] else "#1e1e1e"
                 border_style = "border: 2px solid #ffd700;" if row["하이라이트"] else ""
                 indent_style = "padding-left: 30px;" if row["항목"].startswith("  ㄴ") else ""
-                
+
                 if current_category != row["분류"]:
                     if current_category is not None:
                         html_table += "<tr style='height: 10px; background-color: #0e1117;'><td colspan='10'></td></tr>"
                     current_category = row["분류"]
-                
+
                 change_text = row["변화"]
-                if "▲" in change_text:
-                    change_color = "color: #4ade80;"
-                elif "▼" in change_text:
-                    change_color = "color: #f87171;"
-                else:
-                    change_color = "color: white;"
-                
+                change_color = "color: #4ade80;" if "▲" in change_text else ("color: #f87171;" if "▼" in change_text else "color: white;")
                 liquidity_text = row["유동성 영향"]
-                if "↑" in liquidity_text and "유동성" in liquidity_text:
-                    liquidity_color = "color: #4ade80;"
-                elif "↓" in liquidity_text:
-                    liquidity_color = "color: #f87171;"
-                else:
-                    liquidity_color = "color: #fbbf24;"
-                
+                liquidity_color = "color: #4ade80;" if ("↑" in liquidity_text and "유동성" in liquidity_text) else ("color: #f87171;" if "↓" in liquidity_text else "color: #fbbf24;")
+
                 html_table += f"<tr style='background-color: {bg_color}; {border_style}'>"
                 html_table += f"<td style='padding: 12px; color: #9ca3af; font-weight: 600; font-size: 13px;'>{row['분류']}</td>"
                 html_table += f"<td style='padding: 12px; {indent_style} color: white; font-size: 14px;'>{row['항목']}</td>"
@@ -1083,211 +1155,119 @@ def main():
                 html_table += f"<td style='padding: 12px; {liquidity_color} font-size: 13px;'><b>{liquidity_text}</b></td>"
                 html_table += f"<td style='padding: 12px; text-align: center; font-size: 13px;'>{row['출처']}</td>"
                 html_table += "</tr>"
-            
+
             html_table += "</tbody></table>"
             st.markdown(html_table, unsafe_allow_html=True)
-            
-            # 차트 섹션
+
             st.markdown("---")
             st.markdown(f"### 📈 주요 항목 추이 ({bs_start_date} ~ {bs_end_date})")
-            
+
             chart_names = list(chart_data.keys())
             for i in range(0, len(chart_names), 2):
                 cols = st.columns(2)
-                
                 for j, col in enumerate(cols):
                     if i + j < len(chart_names):
                         name = chart_names[i + j]
                         data = chart_data[name]
-                        
                         with col:
                             fig = create_balance_sheet_chart(data["df"], name, data["series_id"])
                             if fig:
                                 st.plotly_chart(fig, use_container_width=True)
-            
-            # 추가 정보
+
             st.markdown("---")
             with st.expander("📌 항목별 상세 설명 보기"):
                 st.markdown("""
                 #### 💰 자산 항목 (Assets)
-                - **총자산**: 연준 대차대조표의 전체 자산 규모. 증가하면 통화량 증가로 시장 유동성이 높아집니다.
-                - **연준 보유 증권**: 국채와 주택저당증권(MBS)을 매입하여 시장에 유동성을 공급합니다. 양적완화(QE)의 핵심 지표입니다.
-                - **SRF (상설레포)**: 은행이 담보를 제공하고 연준으로부터 단기 자금을 조달하는 시설입니다.
-                - **대출**: 연준이 금융기관에 제공하는 긴급 유동성입니다.
+                - **총자산**: 연준 대차대조표의 전체 자산 규모.
+                - **연준 보유 증권**: 국채와 MBS 매입으로 유동성 공급.
+                - **SRF (상설레포)**: 은행이 담보를 제공하고 연준으로부터 단기 자금 조달.
+                - **대출**: 연준이 금융기관에 제공하는 긴급 유동성.
                 
                 #### 💳 부채 항목 (Liabilities)
-                - **지급준비금**: 은행들이 연준에 예치한 초과 준비금입니다.
-                - **TGA (재무부 일반계정)**: 미 재무부가 연준에 보관하는 현금입니다.
-                - **RRP (역레포)**: 머니마켓펀드 등이 초단기로 연준에 자금을 예치하는 제도입니다.
-                - **MMF (Money Market Funds)**: 머니마켓펀드의 총 자산 규모입니다. *분기별 업데이트 데이터*로 다른 항목과 업데이트 주기가 다릅니다.
-                - **Retail MMF**: 개인투자자용 머니마켓펀드입니다.
-                
-                **참고**: MMF는 Fed의 직접적인 부채는 아니지만, RRP의 주요 참여자이므로 시장 유동성을 파악하는 중요한 지표입니다.
+                - **지급준비금**: 은행들이 연준에 예치한 초과 준비금.
+                - **TGA (재무부 일반계정)**: 미 재무부가 연준에 보관하는 현금.
+                - **RRP (역레포)**: MMF 등이 초단기로 연준에 자금을 예치하는 제도.
+                - **MMF**: 머니마켓펀드 총 자산 규모. *분기별 업데이트*.
                 """)
-        
+
         st.caption("데이터 출처: Federal Reserve Economic Data (FRED)")
-    
+
     # ==================== Tab 2: 금리 스프레드 ====================
     with tab2:
         st.header("금리 스프레드 모니터링")
-        
-        # 사이드바 설정 (탭 안에서)
+
         with st.sidebar:
             st.markdown("### 📅 조회 기간 설정")
-            
-            date_mode = st.radio(
-                "기간 선택 방식",
-                ["빠른 선택", "직접 입력"],
-                index=0,
-                key="spread_date_mode"
-            )
-            
+            date_mode = st.radio("기간 선택 방식", ["빠른 선택", "직접 입력"], index=0, key="spread_date_mode")
             if date_mode == "빠른 선택":
-                period = st.selectbox(
-                    "조회 기간",
+                period = st.selectbox("조회 기간",
                     ["1개월", "3개월", "6개월", "1년", "2년", "5년", "10년", "전체"],
-                    index=3,
-                    key="spread_period"
-                )
-                
-                period_map = {
-                    "1개월": 30, "3개월": 90, "6개월": 180, "1년": 365,
-                    "2년": 730, "5년": 1825, "10년": 3650, "전체": 365 * 20
-                }
-                
+                    index=3, key="spread_period")
+                period_map = {"1개월": 30, "3개월": 90, "6개월": 180, "1년": 365,
+                              "2년": 730, "5년": 1825, "10년": 3650, "전체": 365 * 20}
                 start_date = (datetime.now() - timedelta(days=period_map[period])).strftime('%Y-%m-%d')
                 end_date = datetime.now().strftime('%Y-%m-%d')
-                
             else:
                 col1, col2 = st.columns(2)
-                
                 with col1:
-                    start_date_input = st.date_input(
-                        "시작 날짜",
+                    start_date_input = st.date_input("시작 날짜",
                         value=datetime.now() - timedelta(days=365),
-                        max_value=datetime.now(),
-                        key="spread_start"
-                    )
-                
+                        max_value=datetime.now(), key="spread_start")
                 with col2:
-                    end_date_input = st.date_input(
-                        "종료 날짜",
-                        value=datetime.now(),
-                        max_value=datetime.now(),
-                        key="spread_end"
-                    )
-                
+                    end_date_input = st.date_input("종료 날짜",
+                        value=datetime.now(), max_value=datetime.now(), key="spread_end")
                 start_date = start_date_input.strftime('%Y-%m-%d')
                 end_date = end_date_input.strftime('%Y-%m-%d')
-            
+
             st.markdown("---")
             st.markdown("### 📊 스프레드 정보")
             st.markdown("""
             **주요 스프레드:**
             
             **1. SOFR - IORB**: 은행간 신뢰도  
-            - SOFR: 은행 간 초단기 자금 거래 금리 → 상대방 신용을 전제로 함  
-            - IORB: 은행이 준비금을 연준에 예치하면 받는 금리 → 무위험·상대방 리스크 없음
-            
             **2. EFFR - IORB**: 연준 금리 통제력  
-            - EFFR: 은행 간 초단기 무담보 자금 거래 금리 → 시장에서 형성되는 정책금리  
-            - IORB: 은행이 준비금을 연준에 예치하면 받는 금리 → 은행이 선택할 수 있는 무위험 금리 하한  
-            - → EFFR이 IORB에 얼마나 근접하는지로 연준의 floor system 작동 여부를 판단  
-            - → 괴리 확대 시: 제도적 마찰 또는 단기 유동성 불균형 신호
-            
             **3. SOFR - RRP**: 민간 담보시장 vs 연준 유동성 흡수  
-            - SOFR: 국채 담보 기반 초단기 자금 거래 금리 → 민간 담보부 시장 수급 반영  
-            - RRP: MMF 등 비은행이 연준에 자금을 맡기고 받는 금리 → 사실상의 금리 하한  
-            - → 스프레드는 민간 시장에서 위험을 감수하고 거래할 유인을 의미  
-            - → 축소/근접: 유동성 과잉, 민간 대출 기회 부족  
-            - → 확대: 담보 수요 증가, 레버리지 활동 회복
-            
             **4. 3M TB - EFFR**: 단기 금리 기대  
-            - 3M T-Bill: 3개월 만기 무위험 국채 금리 → 향후 단기 정책금리 기대 반영  
-            - EFFR: 현재의 초단기 정책 기준 금리  
-            - → 시장이 앞으로 3개월간 금리 경로를 어떻게 보는지를 보여줌  
-            - → (+): 금리 인상 기대  
-            - → (−): 금리 인하 기대 또는 안전자산 수요 급증
-            
-            **5. 10Y - 2Y**: 경기 사이클 신호 (전통적 침체 지표)  
-            - 10Y: 장기 성장·물가·중립금리 기대 반영  
-            - 2Y: 향후 정책금리 경로에 민감  
-            - → 장단기 금리차로 경기 확장 vs 침체 기대를 판단  
-            - → 역전(음수): 향후 경기 둔화·침체 가능성 신호
-            
+            **5. 10Y - 2Y**: 경기 사이클 신호  
             **6. 10Y - 3M**: 정책 신뢰 기반 침체 지표  
-            - 10Y: 장기 경제 전망  
-            - 3M: 현재 정책금리 수준에 거의 직결  
-            - → 연준이 중시하는 가장 '정책 친화적' 수익률 곡선 지표  
-            - → 지속적 역전 시: 통화긴축이 실물경제를 제약할 가능성 큼
-            
             **7. STLFSI4**: 금융 스트레스 종합 지표  
-            - STLFSI4: 세인트루이스 연은 금융 스트레스 지수  
-              (금리 스프레드, 변동성, 신용시장 지표 등을 종합)  
-            - → 금융시스템 전반의 긴장도·불안 수준을 수치화  
-            - → 0 이상: 평균 이상의 스트레스  
-            - → 급등 구간: 금융위기·유동성 경색 국면과 높은 상관
-            
             **8. SLOOS 은행 대출 기준**: 위기 선행 지표  
-            - DRTSCILM: 상업·산업 대출 기준을 강화한 은행 순비율 (%)  
-            - → 은행들이 대출 기준을 강화하는 비율 (분기별 설문)  
-            - → 높을수록: 신용 경색 우려 증가 (위기 선행 신호)  
-            - → 낮을수록: 대출 여건 개선  
-            - → 은행이 뉴스보다 먼저 위기 신호를 감지하는 경향이 있어 중요한 선행 지표
             """)
-        
-        # 조회 기간 표시
+
         st.info(f"📅 **조회 기간**: {start_date} ~ {end_date}")
-        
-        # Fear & Greed 및 VIX 지수
+
         st.markdown("---")
         st.subheader("🎭 시장 심리 지표")
-        
+
         indicator_cols = st.columns(2)
-        
+
         with indicator_cols[0]:
             with st.spinner('Fear & Greed 지수 로딩 중...'):
                 fg_data = get_fear_greed_index()
-                
                 if fg_data:
-                    # Fear & Greed 게이지 차트
                     fig_fg = go.Figure(go.Indicator(
                         mode="gauge+number",
                         value=fg_data["score"],
                         domain={'x': [0, 1], 'y': [0, 1]},
                         title={'text': f"{fg_data['emoji']} Fear & Greed Index", 'font': {'size': 18, 'color': '#83858C'}},
-                        number={'suffix': "", 'font': {'size': 40, 'color': '#83858C', 'family': 'Arial Black'}},
+                        number={'font': {'size': 40, 'color': '#83858C', 'family': 'Arial Black'}},
                         gauge={
                             'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "#83858C"},
                             'bar': {'color': fg_data["color"], 'thickness': 0.75},
-                            'bgcolor': "white",
-                            'borderwidth': 2,
-                            'bordercolor': "gray",
+                            'bgcolor': "white", 'borderwidth': 2, 'bordercolor': "gray",
                             'steps': [
-                                {'range': [0, 25], 'color': '#fecaca'},      # Extreme Fear (연한 빨강)
-                                {'range': [25, 45], 'color': '#fed7aa'},     # Fear (연한 주황)
-                                {'range': [45, 55], 'color': '#fef08a'},     # Neutral (연한 노랑)
-                                {'range': [55, 75], 'color': '#bbf7d0'},     # Greed (연한 초록)
-                                {'range': [75, 100], 'color': '#86efac'}     # Extreme Greed (초록)
+                                {'range': [0, 25], 'color': '#fecaca'},
+                                {'range': [25, 45], 'color': '#fed7aa'},
+                                {'range': [45, 55], 'color': '#fef08a'},
+                                {'range': [55, 75], 'color': '#bbf7d0'},
+                                {'range': [75, 100], 'color': '#86efac'}
                             ],
-                            'threshold': {
-                                'line': {'color': "black", 'width': 4},
-                                'thickness': 0.75,
-                                'value': fg_data["score"]
-                            }
+                            'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': fg_data["score"]}
                         }
                     ))
-                    
-                    fig_fg.update_layout(
-                        height=300,
-                        margin=dict(l=20, r=20, t=80, b=20),
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        font={'color': "#83858C", 'family': "Arial"}
-                    )
-                    
+                    fig_fg.update_layout(height=300, margin=dict(l=20, r=20, t=80, b=20),
+                                         paper_bgcolor="rgba(0,0,0,0)", font={'color': "#83858C"})
                     st.plotly_chart(fig_fg, use_container_width=True)
-                    
-                    # 상태 표시
                     st.markdown(f"""
                     <div style='text-align: center; padding: 15px; background-color: {fg_data['color']}20; 
                                 border-radius: 10px; border: 2px solid {fg_data['color']};'>
@@ -1297,25 +1277,14 @@ def main():
                         </p>
                     </div>
                     """, unsafe_allow_html=True)
-                    
-                    # 범위 설명
-                    st.caption("""
-                    **해석 가이드:**
-                    - 0-25: Extreme Fear 😱 (공포 극대)
-                    - 25-45: Fear 😨 (공포)
-                    - 45-55: Neutral 😐 (중립)
-                    - 55-75: Greed 😊 (탐욕)
-                    - 75-100: Extreme Greed 🤑 (탐욕 극대)
-                    """)
+                    st.caption("0-25: Extreme Fear 😱 / 25-45: Fear 😨 / 45-55: Neutral 😐 / 55-75: Greed 😊 / 75-100: Extreme Greed 🤑")
                 else:
                     st.error("Fear & Greed 데이터를 불러올 수 없습니다.")
-        
+
         with indicator_cols[1]:
             with st.spinner('VIX 지수 로딩 중...'):
                 vix_data = get_vix_index()
-                
                 if vix_data:
-                    # VIX 게이지 차트
                     fig_vix = go.Figure(go.Indicator(
                         mode="gauge+number",
                         value=vix_data["value"],
@@ -1324,34 +1293,20 @@ def main():
                         number={'font': {'size': 40, 'color': '#83858C', 'family': 'Arial Black'}},
                         gauge={
                             'axis': {'range': [0, 80], 'tickwidth': 1, 'tickcolor': "#83858C"},
-                            'bgcolor': "white",
-                            'borderwidth': 2,
-                            'bordercolor': "gray",
+                            'bgcolor': "white", 'borderwidth': 2, 'bordercolor': "gray",
                             'steps': [
-                                {'range': [0, 12], 'color': '#86efac'},      # 매우 낮음 (초록)
-                                {'range': [12, 20], 'color': '#bbf7d0'},     # 낮음 (연한 초록)
-                                {'range': [20, 30], 'color': '#fef08a'},     # 보통 (노랑)
-                                {'range': [30, 40], 'color': '#fed7aa'},     # 높음 (주황)
-                                {'range': [40, 80], 'color': '#fecaca'}      # 매우 높음 (빨강)
+                                {'range': [0, 12], 'color': '#86efac'},
+                                {'range': [12, 20], 'color': '#bbf7d0'},
+                                {'range': [20, 30], 'color': '#fef08a'},
+                                {'range': [30, 40], 'color': '#fed7aa'},
+                                {'range': [40, 80], 'color': '#fecaca'}
                             ],
-                            'threshold': {
-                                'line': {'color': "black", 'width': 4},
-                                'thickness': 0.75,
-                                'value': vix_data["value"]
-                            }
+                            'threshold': {'line': {'color': "black", 'width': 4}, 'thickness': 0.75, 'value': vix_data["value"]}
                         }
                     ))
-                    
-                    fig_vix.update_layout(
-                        height=300,
-                        margin=dict(l=20, r=20, t=80, b=20),
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        font={'color': "#83858C", 'family': "Arial"}
-                    )
-                    
+                    fig_vix.update_layout(height=300, margin=dict(l=20, r=20, t=80, b=20),
+                                          paper_bgcolor="rgba(0,0,0,0)", font={'color': "#83858C"})
                     st.plotly_chart(fig_vix, use_container_width=True)
-                    
-                    # 상태 표시
                     st.markdown(f"""
                     <div style='text-align: center; padding: 15px; background-color: {vix_data['color']}20; 
                                 border-radius: 10px; border: 2px solid {vix_data['color']};'>
@@ -1361,233 +1316,309 @@ def main():
                         </p>
                     </div>
                     """, unsafe_allow_html=True)
-                    
-                    # 범위 설명
-                    st.caption("""
-                    **VIX 수준:**
-                    - <12: 매우 낮음 😌 (안정)
-                    - 12-20: 낮음 🙂 (보통)
-                    - 20-30: 보통 😐 (변동성)
-                    - 30-40: 높음 😰 (불안)
-                    - >40: 매우 높음 🚨 (공포)
-                    """)
+                    st.caption("<12: 매우 낮음 😌 / 12-20: 낮음 🙂 / 20-30: 보통 😐 / 30-40: 높음 😰 / >40: 매우 높음 🚨")
                 else:
                     st.error("VIX 데이터를 불러올 수 없습니다.")
-        
+
         st.markdown("---")
-        
-        # 현재 상태 요약
         st.subheader("📍 현재 상태")
-        
+
         spreads_list = list(SPREADS.items())
-        
-        # 첫 번째 줄 (0-3)
         summary_cols_1 = st.columns(4)
         for idx, (key, spread_info) in enumerate(spreads_list[:4]):
             with summary_cols_1[idx]:
                 with st.spinner(f'{spread_info["name"]} 로딩 중...'):
-                    df_spread, latest_value, df_components = calculate_spread(
-                        spread_info, FRED_API_KEY, start_date, end_date
-                    )
-                    
+                    df_spread, latest_value, df_components = calculate_spread(spread_info, FRED_API_KEY, start_date, end_date)
                     if latest_value is not None:
-                        if 'signals' in spread_info:
-                            status_msg = get_signal_status(latest_value, spread_info['signals'])
-                        else:
-                            in_range = spread_info['threshold_min'] <= latest_value <= spread_info['threshold_max']
-                            status_msg = "✅ 정상" if in_range else "⚠️ 주의"
-                        
+                        status_msg = get_signal_status(latest_value, spread_info['signals']) if 'signals' in spread_info else ("✅ 정상" if spread_info['threshold_min'] <= latest_value <= spread_info['threshold_max'] else "⚠️ 주의")
                         value_unit = "" if spread_info.get('is_single_series', False) else "bp"
-                        
-                        st.metric(
-                            label=spread_info['name'],
-                            value=f"{latest_value:.2f}{value_unit}",
-                            delta=status_msg.split(' - ')[0] if ' - ' in status_msg else status_msg
-                        )
+                        st.metric(label=spread_info['name'], value=f"{latest_value:.2f}{value_unit}",
+                                  delta=status_msg.split(' - ')[0] if ' - ' in status_msg else status_msg)
                         st.caption(spread_info['description'])
-        
-        # 두 번째 줄 (4-7)
+
         summary_cols_2 = st.columns(4)
         for idx, (key, spread_info) in enumerate(spreads_list[4:8]):
             with summary_cols_2[idx]:
                 with st.spinner(f'{spread_info["name"]} 로딩 중...'):
-                    df_spread, latest_value, df_components = calculate_spread(
-                        spread_info, FRED_API_KEY, start_date, end_date
-                    )
-                    
+                    df_spread, latest_value, df_components = calculate_spread(spread_info, FRED_API_KEY, start_date, end_date)
                     if latest_value is not None:
-                        if 'signals' in spread_info:
-                            status_msg = get_signal_status(latest_value, spread_info['signals'])
-                        else:
-                            in_range = spread_info['threshold_min'] <= latest_value <= spread_info['threshold_max']
-                            status_msg = "✅ 정상" if in_range else "⚠️ 주의"
-                        
+                        status_msg = get_signal_status(latest_value, spread_info['signals']) if 'signals' in spread_info else ("✅ 정상" if spread_info['threshold_min'] <= latest_value <= spread_info['threshold_max'] else "⚠️ 주의")
                         value_unit = "" if spread_info.get('is_single_series', False) else "bp"
-                        
-                        st.metric(
-                            label=spread_info['name'],
-                            value=f"{latest_value:.2f}{value_unit}",
-                            delta=status_msg.split(' - ')[0] if ' - ' in status_msg else status_msg
-                        )
+                        st.metric(label=spread_info['name'], value=f"{latest_value:.2f}{value_unit}",
+                                  delta=status_msg.split(' - ')[0] if ' - ' in status_msg else status_msg)
                         st.caption(spread_info['description'])
-        
-        # 연준 정책금리 프레임워크
+
         st.markdown("---")
         st.subheader("🎯 연준 정책금리 프레임워크")
-        
+
         with st.spinner('데이터 로딩 중...'):
             policy_series = {
-                'SOFR': '담보부 익일물 금리',
-                'RRPONTSYAWARD': 'ON RRP (하한)',
-                'IORB': '준비금 이자율',
-                'EFFR': '연방기금 실효금리',
-                'DFEDTARL': 'FF 목표 하한',
-                'DFEDTARU': 'FF 목표 상한'
+                'SOFR': '담보부 익일물 금리', 'RRPONTSYAWARD': 'ON RRP (하한)',
+                'IORB': '준비금 이자율', 'EFFR': '연방기금 실효금리',
+                'DFEDTARL': 'FF 목표 하한', 'DFEDTARU': 'FF 목표 상한'
             }
-            
             policy_data = {}
             for series_id in policy_series.keys():
                 df = fetch_fred_data(series_id, FRED_API_KEY, limit=None, start_date=start_date, end_date=end_date)
                 if df is not None:
                     policy_data[series_id] = df
-            
+
             if len(policy_data) > 0:
                 combined_df = pd.DataFrame()
                 for series_id, df in policy_data.items():
-                    # date를 인덱스로 설정
                     df_indexed = df.set_index('date')
                     combined_df[series_id] = df_indexed['value']
-                
                 combined_df = combined_df.ffill().dropna()
-                combined_df = combined_df.sort_index(ascending=True)  # 시간순 정렬
-                
+                combined_df = combined_df.sort_index(ascending=True)
+
                 fig = go.Figure()
-                
                 if 'DFEDTARL' in combined_df.columns and 'DFEDTARU' in combined_df.columns:
-                    fig.add_trace(go.Scatter(
-                        x=combined_df.index, y=combined_df['DFEDTARU'],
-                        mode='lines', name='FF 목표 상한',
-                        line=dict(color='rgba(200,200,200,0.3)', width=1, dash='dash')
-                    ))
-                    fig.add_trace(go.Scatter(
-                        x=combined_df.index, y=combined_df['DFEDTARL'],
-                        mode='lines', name='FF 목표 하한',
-                        line=dict(color='rgba(200,200,200,0.3)', width=1, dash='dash'),
-                        fill='tonexty', fillcolor='rgba(200,200,200,0.1)'
-                    ))
-                
-                colors = {
-                    'SOFR': '#FF6B6B', 'RRPONTSYAWARD': '#4ECDC4',
-                    'IORB': '#95E1D3', 'EFFR': '#F38181'
-                }
-                
+                    fig.add_trace(go.Scatter(x=combined_df.index, y=combined_df['DFEDTARU'],
+                        mode='lines', name='FF 목표 상한', line=dict(color='rgba(200,200,200,0.3)', width=1, dash='dash')))
+                    fig.add_trace(go.Scatter(x=combined_df.index, y=combined_df['DFEDTARL'],
+                        mode='lines', name='FF 목표 하한', line=dict(color='rgba(200,200,200,0.3)', width=1, dash='dash'),
+                        fill='tonexty', fillcolor='rgba(200,200,200,0.1)'))
+
+                colors = {'SOFR': '#FF6B6B', 'RRPONTSYAWARD': '#4ECDC4', 'IORB': '#95E1D3', 'EFFR': '#F38181'}
                 for series_id, label in policy_series.items():
                     if series_id in combined_df.columns and series_id not in ['DFEDTARL', 'DFEDTARU']:
-                        fig.add_trace(go.Scatter(
-                            x=combined_df.index, y=combined_df[series_id],
+                        fig.add_trace(go.Scatter(x=combined_df.index, y=combined_df[series_id],
                             mode='lines', name=f'{series_id} ({label})',
-                            line=dict(color=colors.get(series_id, '#999999'), width=2)
-                        ))
-                
-                fig.update_layout(
-                    title="연준 정책금리 프레임워크 및 시장 금리",
-                    xaxis_title="날짜", yaxis_title="금리 (%)",
-                    hovermode='x unified', height=500,
-                    showlegend=True,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                )
-                
+                            line=dict(color=colors.get(series_id, '#999999'), width=2)))
+
+                fig.update_layout(title="연준 정책금리 프레임워크 및 시장 금리",
+                                  xaxis_title="날짜", yaxis_title="금리 (%)",
+                                  hovermode='x unified', height=500, showlegend=True,
+                                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
                 st.plotly_chart(fig, use_container_width=True)
-                
+
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.info("""
-                    **금리 조절 메커니즘:**
-                    - 목표 범위: FOMC 설정
-                    - IORB: 상한 역할
-                    - ON RRP: 하한 역할
-                    - EFFR: 실제 시장금리
-                    """)
-                
+                    st.info("**금리 조절 메커니즘:**\n- 목표 범위: FOMC 설정\n- IORB: 상한 역할\n- ON RRP: 하한 역할\n- EFFR: 실제 시장금리")
                 with col2:
                     if len(combined_df) > 0:
-                        latest = combined_df.iloc[-1]  # 최신 데이터는 마지막 행
-                        st.success(f"""
-                        **최신 금리 (%):**
-                        - SOFR: {latest.get('SOFR', 0):.2f}%
-                        - EFFR: {latest.get('EFFR', 0):.2f}%
-                        - IORB: {latest.get('IORB', 0):.2f}%
-                        - ON RRP: {latest.get('RRPONTSYAWARD', 0):.2f}%
-                        """)
-        
-        # 상세 차트
+                        latest = combined_df.iloc[-1]
+                        st.success(f"**최신 금리 (%):**\n- SOFR: {latest.get('SOFR', 0):.2f}%\n- EFFR: {latest.get('EFFR', 0):.2f}%\n- IORB: {latest.get('IORB', 0):.2f}%\n- ON RRP: {latest.get('RRPONTSYAWARD', 0):.2f}%")
+
         st.markdown("---")
         st.subheader("📈 상세 차트")
-        
         spread_tabs = st.tabs([spread_info['name'] for spread_info in SPREADS.values()])
-        
+
         for idx, (key, spread_info) in enumerate(SPREADS.items()):
             with spread_tabs[idx]:
                 with st.spinner('데이터 로딩 중...'):
-                    df_spread, latest_value, df_components = calculate_spread(
-                        spread_info, FRED_API_KEY, start_date, end_date
-                    )
-                    
+                    df_spread, latest_value, df_components = calculate_spread(spread_info, FRED_API_KEY, start_date, end_date)
                     if df_spread is not None:
                         col1, col2 = st.columns([2, 1])
-                        
+                        value_unit = "" if spread_info.get('is_single_series', False) else "bp"
                         with col1:
                             stat_cols = st.columns(4)
-                            value_unit = "" if spread_info.get('is_single_series', False) else "bp"
-                            
-                            with stat_cols[0]:
-                                st.metric("현재 값", f"{latest_value:.2f}{value_unit}")
-                            with stat_cols[1]:
-                                st.metric("평균", f"{df_spread['spread'].mean():.2f}{value_unit}")
-                            with stat_cols[2]:
-                                st.metric("최대", f"{df_spread['spread'].max():.2f}{value_unit}")
-                            with stat_cols[3]:
-                                st.metric("최소", f"{df_spread['spread'].min():.2f}{value_unit}")
-                        
+                            with stat_cols[0]: st.metric("현재 값", f"{latest_value:.2f}{value_unit}")
+                            with stat_cols[1]: st.metric("평균", f"{df_spread['spread'].mean():.2f}{value_unit}")
+                            with stat_cols[2]: st.metric("최대", f"{df_spread['spread'].max():.2f}{value_unit}")
+                            with stat_cols[3]: st.metric("최소", f"{df_spread['spread'].min():.2f}{value_unit}")
                         with col2:
                             if 'signals' in spread_info:
                                 current_signal = get_signal_status(latest_value, spread_info['signals'])
                                 signal_lines = ["**현재 신호:**", current_signal, ""]
                             else:
                                 signal_lines = []
-                            
-                            info_text = "\n".join(signal_lines + [
-                                f"**정상 범위:** {spread_info['normal_range']}",
-                                "", f"**의미:** {spread_info['description']}",
-                                "", f"**해석:** {spread_info['interpretation']}"
-                            ])
-                            
-                            st.info(info_text)
-                        
-                        st.plotly_chart(
-                            create_spread_chart(df_spread, spread_info['name'], spread_info, latest_value),
-                            use_container_width=True
-                        )
-                        
+                            st.info("\n".join(signal_lines + [
+                                f"**정상 범위:** {spread_info['normal_range']}", "",
+                                f"**의미:** {spread_info['description']}", "",
+                                f"**해석:** {spread_info['interpretation']}"
+                            ]))
+                        st.plotly_chart(create_spread_chart(df_spread, spread_info['name'], spread_info, latest_value), use_container_width=True)
                         if not spread_info.get('is_single_series', False) and df_components is not None:
                             with st.expander("구성 요소 보기"):
-                                st.plotly_chart(
-                                    create_components_chart(df_components, spread_info['series']),
-                                    use_container_width=True
-                                )
-                                
-                                latest_components = df_components.iloc[0]  # 최신값은 첫 행
-                                st.dataframe(
-                                    pd.DataFrame({
-                                        '지표': spread_info['series'],
-                                        '현재 값 (%)': [f"{val:.4f}" for val in latest_components.values]
-                                    }),
-                                    hide_index=True
-                                )
+                                st.plotly_chart(create_components_chart(df_components, spread_info['series']), use_container_width=True)
+                                latest_components = df_components.iloc[0]
+                                st.dataframe(pd.DataFrame({
+                                    '지표': spread_info['series'],
+                                    '현재 값 (%)': [f"{val:.4f}" for val in latest_components.values]
+                                }), hide_index=True)
                     else:
                         st.error("데이터를 불러올 수 없습니다.")
-        
-        st.caption(f"데이터 출처: Federal Reserve Economic Data (FRED)")
+
+        st.caption("데이터 출처: Federal Reserve Economic Data (FRED)")
+
+    # ==================== Tab 3: Fear & Greed 히스토리 ====================
+    with tab3:
+        st.header("😨 Fear & Greed Index 전체 히스토리")
+        st.caption("출처: CNN Business Fear & Greed Index (https://production.dataviz.cnn.io)")
+
+        with st.spinner("CNN Fear & Greed 히스토리 데이터 로딩 중..."):
+            history_data = fetch_fear_greed_full_history()
+
+        if history_data is None:
+            st.error("❌ Fear & Greed 히스토리 데이터를 불러올 수 없습니다. 잠시 후 다시 시도해주세요.")
+            st.stop()
+
+        df_fg = history_data.get('fg_history')
+        df_sp500 = history_data.get('sp500')
+
+        if df_fg is None or len(df_fg) == 0:
+            st.error("Fear & Greed 히스토리 데이터가 비어있습니다.")
+            st.stop()
+
+        # ── 현재 상태 요약 카드 ──
+        current_info = history_data.get('current', {})
+        latest_row = df_fg.iloc[-1]
+        latest_score = current_info.get('score', latest_row['score'])
+        latest_rating = current_info.get('rating', latest_row['rating'])
+        current_color = rating_to_color(latest_rating)
+
+        prev_week  = current_info.get('previous_1_week', None)
+        prev_month = current_info.get('previous_1_month', None)
+        prev_year  = current_info.get('previous_1_year', None)
+
+        st.markdown("#### 📌 현재 상태")
+        kpi_cols = st.columns(4)
+
+        with kpi_cols[0]:
+            st.markdown(f"""
+            <div style='padding:16px; background:{current_color}22; border:2px solid {current_color};
+                        border-radius:10px; text-align:center;'>
+                <div style='font-size:32px; font-weight:bold; color:{current_color};'>{latest_score:.1f}</div>
+                <div style='color:white; font-size:14px; margin-top:4px;'>{latest_rating.title()}</div>
+                <div style='color:#9ca3af; font-size:12px;'>현재 값</div>
+            </div>""", unsafe_allow_html=True)
+
+        labels = [("1주 전", prev_week), ("1개월 전", prev_month), ("1년 전", prev_year)]
+        for i, (label, val) in enumerate(labels):
+            with kpi_cols[i + 1]:
+                if val is not None:
+                    diff = latest_score - val
+                    diff_color = "#4ade80" if diff >= 0 else "#f87171"
+                    diff_str = f"{'▲' if diff >= 0 else '▼'} {abs(diff):.1f}"
+                    c = rating_to_color(
+                        'extreme fear' if val < 25 else 'fear' if val < 45 else
+                        'neutral' if val < 55 else 'greed' if val < 75 else 'extreme greed'
+                    )
+                    st.markdown(f"""
+                    <div style='padding:16px; background:#1e1e1e; border:1px solid #374151;
+                                border-radius:10px; text-align:center;'>
+                        <div style='font-size:28px; font-weight:bold; color:{c};'>{val:.1f}</div>
+                        <div style='color:{diff_color}; font-size:13px; margin-top:4px;'>{diff_str}</div>
+                        <div style='color:#9ca3af; font-size:12px;'>{label}</div>
+                    </div>""", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                    <div style='padding:16px; background:#1e1e1e; border:1px solid #374151;
+                                border-radius:10px; text-align:center;'>
+                        <div style='font-size:28px; color:#6b7280;'>—</div>
+                        <div style='color:#9ca3af; font-size:12px;'>{label}</div>
+                    </div>""", unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        # ── 날짜 필터 ──
+        st.markdown("#### 🗓️ 기간 필터")
+        filter_cols = st.columns([3, 1])
+        with filter_cols[0]:
+            date_range_opt = st.select_slider(
+                "조회 기간 선택",
+                options=["3개월", "6개월", "1년", "2년", "3년", "5년", "전체"],
+                value="전체",
+                label_visibility="collapsed"
+            )
+        with filter_cols[1]:
+            show_sp500 = st.checkbox("S&P 500 오버레이", value=True)
+
+        range_map = {"3개월": 90, "6개월": 180, "1년": 365, "2년": 730,
+                     "3년": 1095, "5년": 1825, "전체": None}
+        days_filter = range_map[date_range_opt]
+
+        df_fg_filtered = df_fg.copy()
+        df_sp500_filtered = df_sp500.copy() if df_sp500 is not None else None
+
+        if days_filter is not None:
+            cutoff = datetime.now() - timedelta(days=days_filter)
+            df_fg_filtered = df_fg_filtered[df_fg_filtered['date'] >= cutoff]
+            if df_sp500_filtered is not None:
+                df_sp500_filtered = df_sp500_filtered[df_sp500_filtered['date'] >= cutoff]
+
+        # ── 메인 히스토리 차트 ──
+        st.markdown("#### 📊 Fear & Greed 히스토리 차트")
+        fig_main = create_fg_history_chart(
+            df_fg_filtered,
+            df_sp500_filtered if show_sp500 else None
+        )
+        if fig_main:
+            st.plotly_chart(fig_main, use_container_width=True)
+
+        st.markdown("---")
+
+        # ── 분석 차트 2열 레이아웃 ──
+        st.markdown("#### 🔍 상세 분석")
+        analysis_col1, analysis_col2 = st.columns(2)
+
+        with analysis_col1:
+            fig_dist = create_fg_distribution_chart(df_fg_filtered)
+            if fig_dist:
+                st.plotly_chart(fig_dist, use_container_width=True)
+
+        with analysis_col2:
+            fig_rolling = create_fg_rolling_chart(df_fg_filtered)
+            if fig_rolling:
+                st.plotly_chart(fig_rolling, use_container_width=True)
+
+        # ── 세부 구성 지표 ──
+        st.markdown("---")
+        st.markdown("#### 📉 구성 지표 히스토리")
+        st.caption("VIX, Put/Call Ratio, Junk Bond Spread 등 Fear & Greed 계산에 사용되는 세부 지표")
+
+        # 필터 적용된 데이터로 구성
+        filtered_history = dict(history_data)
+        if days_filter is not None:
+            cutoff = datetime.now() - timedelta(days=days_filter)
+            for key in ['vix', 'put_call', 'junk_bond']:
+                if key in filtered_history and filtered_history[key] is not None:
+                    col_name = {'vix': 'vix', 'put_call': 'ratio', 'junk_bond': 'spread'}[key]
+                    filtered_history[key] = filtered_history[key][filtered_history[key]['date'] >= cutoff]
+
+        fig_sub = create_fg_sub_indicators_chart(filtered_history)
+        if fig_sub:
+            st.plotly_chart(fig_sub, use_container_width=True)
+        else:
+            st.info("세부 구성 지표 데이터를 불러올 수 없습니다.")
+
+        # ── 통계 요약 테이블 ──
+        st.markdown("---")
+        with st.expander("📋 구간별 통계 상세 보기"):
+            rating_order = ['extreme fear', 'fear', 'neutral', 'greed', 'extreme greed']
+            rating_labels_ko = {
+                'extreme fear': '극도의 공포', 'fear': '공포',
+                'neutral': '중립', 'greed': '탐욕', 'extreme greed': '극도의 탐욕'
+            }
+            stats_rows = []
+            for r in rating_order:
+                subset = df_fg_filtered[df_fg_filtered['rating'].str.lower() == r]
+                if len(subset) > 0:
+                    stats_rows.append({
+                        '구간': f"{rating_labels_ko[r]} ({r.title()})",
+                        '일수': len(subset),
+                        '비율': f"{len(subset)/len(df_fg_filtered)*100:.1f}%",
+                        '평균 점수': f"{subset['score'].mean():.1f}",
+                        '최소': f"{subset['score'].min():.1f}",
+                        '최대': f"{subset['score'].max():.1f}",
+                    })
+
+            if stats_rows:
+                df_stats = pd.DataFrame(stats_rows)
+                st.dataframe(df_stats, hide_index=True, use_container_width=True)
+
+            st.markdown(f"""
+            **전체 기간 통계** (필터 기간: {date_range_opt})
+            - 총 데이터: **{len(df_fg_filtered):,}일**
+            - 평균 점수: **{df_fg_filtered['score'].mean():.1f}**
+            - 중앙값: **{df_fg_filtered['score'].median():.1f}**
+            - 최고점: **{df_fg_filtered['score'].max():.1f}** ({df_fg_filtered.loc[df_fg_filtered['score'].idxmax(), 'date'].strftime('%Y-%m-%d')})
+            - 최저점: **{df_fg_filtered['score'].min():.1f}** ({df_fg_filtered.loc[df_fg_filtered['score'].idxmin(), 'date'].strftime('%Y-%m-%d')})
+            """)
+
+        st.caption("데이터 출처: CNN Business Fear & Greed Index")
+
 
 if __name__ == "__main__":
     main()
