@@ -56,6 +56,12 @@ try:
 except:
     FRED_API_KEY = ""
 
+# TabPFN API 토큰
+try:
+    TABPFN_TOKEN = st.secrets.get("TABPFN_API_TOKEN", "")
+except:
+    TABPFN_TOKEN = ""
+
 # ==================== 공통 함수 ====================
 
 @st.cache_data(ttl=1800)
@@ -247,7 +253,255 @@ def fetch_fear_greed_full_history():
 
     return result
 
-def rating_to_color(rating):
+# ==================== TabPFN-TS 예측 함수 ====================
+
+@st.cache_resource
+def _init_tabpfn_client(token: str):
+    """tabpfn-client 초기화 (앱 세션당 1회)"""
+    try:
+        import tabpfn_client
+        if token:
+            tabpfn_client.init(use_server=True, token=token)
+        return True, None
+    except ImportError:
+        return False, "tabpfn-client 미설치"
+    except Exception as e:
+        return False, str(e)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def run_tabpfn_forecast(
+    values_tuple: tuple,
+    dates_tuple: tuple,
+    pred_len: int,
+    item_id: str,
+    token: str,
+) -> tuple:
+    """
+    TabPFN-TS 시계열 예측 실행.
+
+    Returns
+    -------
+    (pred_df, error_msg) — 성공 시 error_msg=None
+    pred_df columns: timestamp, target, 0.1, 0.25, 0.5, 0.75, 0.9
+    """
+    try:
+        import tabpfn_client
+        from tabpfn_time_series import (
+            TimeSeriesDataFrame,
+            FeatureTransformer,
+            TabPFNTimeSeriesPredictor,
+            TabPFNMode,
+        )
+        from tabpfn_time_series.data_preparation import generate_test_X
+        from tabpfn_time_series.features import (
+            RunningIndexFeature,
+            CalendarFeature,
+            AutoSeasonalFeature,
+        )
+
+        # 인증
+        if token:
+            tabpfn_client.init(use_server=True, token=token)
+
+        # DataFrame 구성 (MultiIndex: item_id × timestamp)
+        timestamps = pd.to_datetime(list(dates_tuple))
+        values = list(values_tuple)
+        df = pd.DataFrame(
+            {"target": values},
+            index=pd.MultiIndex.from_arrays(
+                [[item_id] * len(timestamps), timestamps],
+                names=["item_id", "timestamp"],
+            ),
+        )
+        tsdf = TimeSeriesDataFrame(df)
+
+        # train/test split
+        train, _ = tsdf.train_test_split(prediction_length=pred_len)
+        test = generate_test_X(train, pred_len)
+
+        # 특성 공학
+        features = [RunningIndexFeature(), CalendarFeature(), AutoSeasonalFeature()]
+        train, test = FeatureTransformer(features).transform(train, test)
+
+        # 예측 (quantile 포함)
+        predictor = TabPFNTimeSeriesPredictor(tabpfn_mode=TabPFNMode.CLIENT)
+        pred = predictor.predict(train, test)
+
+        pred_df = pred.reset_index()
+        # timestamp 컬럼 통일
+        if "timestamp" not in pred_df.columns and "item_id" in pred_df.columns:
+            pred_df = pred_df.rename(
+                columns={c: "timestamp" for c in pred_df.columns if "time" in str(c).lower() and c != "timestamp"}
+            )
+        pred_df["timestamp"] = pd.to_datetime(pred_df["timestamp"])
+        return pred_df, None
+
+    except ImportError:
+        return None, (
+            "tabpfn-time-series 패키지가 설치되지 않았습니다.\n"
+            "requirements.txt에 `tabpfn-time-series` 를 추가하고 앱을 재배포하세요."
+        )
+    except Exception as e:
+        return None, f"예측 실패: {str(e)}"
+
+
+def create_forecast_chart(
+    df_hist: pd.DataFrame,
+    hist_col: str,
+    pred_df: pd.DataFrame,
+    title: str,
+    y_label: str,
+    is_fg: bool = False,
+    y_min: float = None,
+    y_max: float = None,
+):
+    """
+    히스토리(마지막 90일) + TabPFN-TS 예측 + 신뢰구간 통합 차트.
+
+    Parameters
+    ----------
+    df_hist  : 히스토리 DataFrame — 'date' + hist_col
+    hist_col : 히스토리 값 컬럼명 (예: 'score', 'price')
+    pred_df  : 예측 결과 DataFrame — 'timestamp', 'target', '0.1', '0.9', …
+    is_fg    : True이면 Fear & Greed 배경 구간 표시
+    """
+    if df_hist is None or pred_df is None or len(pred_df) == 0:
+        return None
+
+    # timestamp → date
+    pred_df = pred_df.copy()
+    pred_df["date"] = pd.to_datetime(pred_df.get("timestamp", pred_df.index))
+
+    # point forecast 컬럼
+    point_col = "target" if "target" in pred_df.columns else pred_df.columns[2]
+
+    # quantile 컬럼 탐색 (문자열/숫자 모두 고려)
+    def _find_col(df, *candidates):
+        for c in candidates:
+            if c in df.columns:
+                return c
+        return None
+
+    q10 = _find_col(pred_df, "0.1", 0.1)
+    q25 = _find_col(pred_df, "0.25", 0.25)
+    q75 = _find_col(pred_df, "0.75", 0.75)
+    q90 = _find_col(pred_df, "0.9", 0.9)
+
+    fig = go.Figure()
+
+    # F&G 배경 구간
+    if is_fg:
+        zones = [
+            (0, 25,  "rgba(220,38,38,0.07)",  "Extreme Fear"),
+            (25, 45, "rgba(249,115,22,0.07)",  "Fear"),
+            (45, 55, "rgba(234,179,8,0.07)",   "Neutral"),
+            (55, 75, "rgba(34,197,94,0.07)",   "Greed"),
+            (75, 100,"rgba(22,163,74,0.07)",   "Extreme Greed"),
+        ]
+        for y0, y1, color, lbl in zones:
+            fig.add_hrect(y0=y0, y1=y1, fillcolor=color, line_width=0,
+                          annotation_text=lbl, annotation_position="left",
+                          annotation_font_size=9,
+                          annotation_font_color="rgba(200,200,200,0.4)")
+
+    # 히스토리 (마지막 90일)
+    df_tail = df_hist[["date", hist_col]].dropna().tail(120).copy()
+    fig.add_trace(go.Scatter(
+        x=df_tail["date"], y=df_tail[hist_col],
+        mode="lines", name="실제 데이터",
+        line=dict(color="#60a5fa", width=2),
+        hovertemplate="<b>%{x|%Y-%m-%d}</b><br>실제: <b>%{y:.2f}</b><extra></extra>",
+    ))
+
+    # 신뢰구간 10%~90% (연한 밴드)
+    if q10 is not None and q90 is not None:
+        x_fill = pd.concat([pred_df["date"], pred_df["date"].iloc[::-1].reset_index(drop=True)])
+        y_fill = pd.concat([pred_df[q90], pred_df[q10].iloc[::-1].reset_index(drop=True)])
+        fig.add_trace(go.Scatter(
+            x=x_fill, y=y_fill,
+            fill="toself", fillcolor="rgba(251,191,36,0.13)",
+            line=dict(color="rgba(0,0,0,0)"),
+            name="신뢰구간 80% (10~90%)",
+            hoverinfo="skip",
+        ))
+
+    # 신뢰구간 25%~75% (진한 밴드)
+    if q25 is not None and q75 is not None:
+        x_fill2 = pd.concat([pred_df["date"], pred_df["date"].iloc[::-1].reset_index(drop=True)])
+        y_fill2 = pd.concat([pred_df[q75], pred_df[q25].iloc[::-1].reset_index(drop=True)])
+        fig.add_trace(go.Scatter(
+            x=x_fill2, y=y_fill2,
+            fill="toself", fillcolor="rgba(251,191,36,0.25)",
+            line=dict(color="rgba(0,0,0,0)"),
+            name="신뢰구간 50% (25~75%)",
+            hoverinfo="skip",
+        ))
+
+    # 예측 포인트 라인
+    fig.add_trace(go.Scatter(
+        x=pred_df["date"], y=pred_df[point_col],
+        mode="lines+markers", name="TabPFN-TS 예측",
+        line=dict(color="#fbbf24", width=2.5, dash="dash"),
+        marker=dict(size=5, color="#fbbf24",
+                    line=dict(color="white", width=1)),
+        hovertemplate="<b>%{x|%Y-%m-%d}</b><br>예측: <b>%{y:.2f}</b><extra></extra>",
+    ))
+
+    # 예측 시작 수직선
+    split_date = df_hist["date"].max()
+    fig.add_vline(
+        x=split_date.timestamp() * 1000,
+        line_dash="dot", line_color="rgba(255,255,255,0.35)", line_width=1.5,
+        annotation_text="  예측 시작",
+        annotation_position="top right",
+        annotation_font_color="rgba(200,200,200,0.7)",
+        annotation_font_size=11,
+    )
+
+    fig.update_layout(
+        title=dict(text=title, font=dict(color="white", size=15)),
+        xaxis=dict(color="white", gridcolor="rgba(75,75,75,0.3)"),
+        yaxis=dict(
+            title=y_label, color="white",
+            gridcolor="rgba(75,75,75,0.3)",
+            range=[y_min, y_max] if y_min is not None else None,
+        ),
+        plot_bgcolor="#0e1117",
+        paper_bgcolor="#0e1117",
+        font=dict(color="white"),
+        hovermode="x unified",
+        height=430,
+        showlegend=True,
+        legend=dict(
+            orientation="h", y=1.02, x=1, xanchor="right",
+            font=dict(color="white", size=11),
+        ),
+        margin=dict(l=60, r=40, t=65, b=40),
+    )
+    return fig
+
+
+def _build_forecast_summary(pred_df: pd.DataFrame) -> pd.DataFrame:
+    """예측 결과를 보기 좋은 요약 테이블로 변환"""
+    df = pred_df.copy()
+    df["date"] = pd.to_datetime(df.get("timestamp", df.index))
+    point_col = "target" if "target" in df.columns else df.columns[2]
+
+    summary = pd.DataFrame({"날짜": df["date"].dt.strftime("%Y-%m-%d"),
+                             "예측값": df[point_col].round(2)})
+    for label, keys in [
+        ("하한 10%", ["0.1", 0.1]),
+        ("하한 25%", ["0.25", 0.25]),
+        ("중앙값 50%", ["0.5", 0.5]),
+        ("상한 75%", ["0.75", 0.75]),
+        ("상한 90%", ["0.9", 0.9]),
+    ]:
+        for k in keys:
+            if k in df.columns:
+                summary[label] = df[k].round(2)
+                break
+    return summary
     """rating 문자열을 색상으로 변환"""
     mapping = {
         'extreme fear': '#dc2626',
@@ -1699,6 +1953,177 @@ def main():
             """)
 
         st.caption("데이터 출처: CNN Business Fear & Greed Index")
+
+        # ══════════════════════════════════════════════════════════════
+        # 🔮  TabPFN-TS AI 예측 섹션
+        # ══════════════════════════════════════════════════════════════
+        st.markdown("---")
+        st.subheader("🔮 TabPFN-TS AI 예측")
+        st.caption(
+            "tabpfn-time-series | NeurIPS 2024 채택 · GIFT-EVAL 1위 · "
+            "Zero-Shot 시계열 예측 · 신뢰구간 포함"
+        )
+
+        if not TABPFN_TOKEN:
+            st.warning(
+                "⚠️ TabPFN 예측을 사용하려면 Streamlit Secrets에 "
+                "**TABPFN_API_TOKEN**을 설정하세요."
+            )
+            with st.expander("📌 설정 방법 보기"):
+                st.markdown("""
+**① API 토큰 발급 (무료)**
+1. [https://ux.priorlabs.ai](https://ux.priorlabs.ai) 접속 → 회원가입
+2. 대시보드에서 API 토큰 발급
+
+**② Streamlit Secrets 설정**
+Streamlit Cloud → 앱 → Settings → Secrets 에 아래 내용 추가:
+```toml
+FRED_API_KEY      = "your_fred_key"
+TABPFN_API_TOKEN  = "your_tabpfn_token"
+```
+
+**③ requirements.txt 에 추가**
+```
+tabpfn-time-series
+```
+
+**기능 설명:**
+- Fear & Greed Index 및 S&P 500 의 미래 N일을 AI로 예측
+- 80% 신뢰구간 (10%~90%) 및 50% 신뢰구간 (25%~75%) 자동 표시
+- GPU 불필요 · TabPFN Cloud API 사용
+                """)
+        else:
+            # ── 컨트롤 ──
+            fc_c1, fc_c2, fc_c3, fc_c4 = st.columns(4)
+            with fc_c1:
+                fc_target = st.selectbox(
+                    "예측 대상", ["Fear & Greed Index", "S&P 500", "둘 다"],
+                    key="fc_target",
+                )
+            with fc_c2:
+                pred_len = st.selectbox(
+                    "예측 기간",
+                    [7, 14, 30, 60],
+                    index=2,
+                    format_func=lambda x: f"{x}일",
+                    key="fc_pred_len",
+                )
+            with fc_c3:
+                train_window = st.selectbox(
+                    "학습 기간",
+                    [180, 365, 730, 0],
+                    index=1,
+                    format_func=lambda x: "전체" if x == 0 else f"최근 {x}일",
+                    key="fc_train_window",
+                )
+            with fc_c4:
+                st.markdown("<br>", unsafe_allow_html=True)
+                run_btn = st.button(
+                    "🚀 예측 실행",
+                    type="primary",
+                    key="run_forecast_btn",
+                    use_container_width=True,
+                )
+
+            # ── 예측 정보 배너 ──
+            st.info(
+                f"📋 학습: 최근 **{'전체' if train_window==0 else f'{train_window}일'}** 데이터 → "
+                f"미래 **{pred_len}일** 예측 | "
+                f"모델: TabPFN-TS (tabpfn-client Cloud API) | "
+                f"예측값 + 80%·50% 신뢰구간 표시"
+            )
+
+            if run_btn:
+                # ─────────────────────────────────────────
+                # 예측 대상 목록 결정
+                # ─────────────────────────────────────────
+                targets = []
+                if fc_target in ("Fear & Greed Index", "둘 다"):
+                    targets.append("fg")
+                if fc_target in ("S&P 500", "둘 다") and df_sp500 is not None:
+                    targets.append("sp500")
+
+                if not targets:
+                    st.error("S&P 500 데이터가 없습니다.")
+                else:
+                    for target_key in targets:
+                        # ── 데이터 준비 ──
+                        if target_key == "fg":
+                            df_src = df_fg.dropna(subset=["score"]).sort_values("date").copy()
+                            val_col = "score"
+                            fc_title = f"Fear & Greed Index — TabPFN-TS {pred_len}일 예측"
+                            fc_ylabel = "Fear & Greed Score"
+                            fc_item = "fear_greed"
+                            fc_is_fg = True
+                            fc_ymin, fc_ymax = 0, 100
+                        else:
+                            df_src = df_sp500.dropna(subset=["price"]).sort_values("date").copy()
+                            val_col = "price"
+                            fc_title = f"S&P 500 — TabPFN-TS {pred_len}일 예측"
+                            fc_ylabel = "S&P 500 Price"
+                            fc_item = "sp500"
+                            fc_is_fg = False
+                            fc_ymin, fc_ymax = None, None
+
+                        if train_window > 0:
+                            cutoff = df_src["date"].max() - timedelta(days=train_window)
+                            df_src = df_src[df_src["date"] >= cutoff]
+
+                        if len(df_src) < 30:
+                            st.warning(f"{fc_title}: 학습 데이터가 30일 미만입니다.")
+                            continue
+
+                        # ── 예측 실행 ──
+                        values_t = tuple(df_src[val_col].tolist())
+                        dates_t  = tuple(df_src["date"].dt.strftime("%Y-%m-%d").tolist())
+
+                        with st.spinner(
+                            f"🧠 {fc_title} 예측 중… "
+                            f"(학습 {len(df_src):,}일 → 예측 {pred_len}일)"
+                        ):
+                            pred_df, err = run_tabpfn_forecast(
+                                values_t, dates_t, pred_len, fc_item, TABPFN_TOKEN
+                            )
+
+                        if err:
+                            st.error(f"❌ {err}")
+                            continue
+
+                        # ── 차트 ──
+                        fig_fc = create_forecast_chart(
+                            df_hist=df_src[["date", val_col]],
+                            hist_col=val_col,
+                            pred_df=pred_df,
+                            title=fc_title,
+                            y_label=fc_ylabel,
+                            is_fg=fc_is_fg,
+                            y_min=fc_ymin,
+                            y_max=fc_ymax,
+                        )
+                        if fig_fc:
+                            st.plotly_chart(fig_fc, use_container_width=True)
+                        else:
+                            st.error("차트 생성 실패 — 예측 결과를 확인하세요.")
+
+                        # ── 예측 결과 요약 테이블 ──
+                        with st.expander("📋 예측 수치 상세 보기"):
+                            summary_df = _build_forecast_summary(pred_df)
+                            st.dataframe(
+                                summary_df,
+                                hide_index=True,
+                                use_container_width=True,
+                            )
+
+                            # 예측 통계
+                            point_col_sum = "target" if "target" in pred_df.columns else pred_df.columns[2]
+                            fc_vals = pred_df[point_col_sum]
+                            sc1, sc2, sc3, sc4 = st.columns(4)
+                            sc1.metric("예측 평균", f"{fc_vals.mean():.2f}")
+                            sc2.metric("예측 최대", f"{fc_vals.max():.2f}")
+                            sc3.metric("예측 최소", f"{fc_vals.min():.2f}")
+                            sc4.metric("예측 기간", f"{pred_len}일")
+
+                        st.markdown("")  # 간격
 
 
 if __name__ == "__main__":
