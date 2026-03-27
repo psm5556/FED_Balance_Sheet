@@ -502,15 +502,20 @@ def _build_forecast_summary(pred_df: pd.DataFrame) -> pd.DataFrame:
                 summary[label] = df[k].round(2)
                 break
     return summary
-    """rating 문자열을 색상으로 변환"""
+
+
+def rating_to_color(rating) -> str:
+    """rating 문자열을 색상으로 변환 (None/NaN/float 안전 처리)"""
+    if rating is None or not isinstance(rating, str):
+        return '#9ca3af'
     mapping = {
-        'extreme fear': '#dc2626',
-        'fear': '#f97316',
-        'neutral': '#eab308',
-        'greed': '#22c55e',
+        'extreme fear':  '#dc2626',
+        'fear':          '#f97316',
+        'neutral':       '#eab308',
+        'greed':         '#22c55e',
         'extreme greed': '#16a34a',
     }
-    return mapping.get(rating.lower(), '#9ca3af')
+    return mapping.get(str(rating).lower().strip(), '#9ca3af')
 
 def create_fg_history_chart(df_fg, df_sp500=None):
     """Fear & Greed 히스토리 메인 차트 (색상 구간 + S&P500 오버레이)"""
@@ -1774,33 +1779,65 @@ def main():
             st.stop()
 
         df_fg = history_data.get('fg_history')
-        df_sp500 = history_data.get('sp500')
 
         if df_fg is None or len(df_fg) == 0:
             st.error("Fear & Greed 히스토리 데이터가 비어있습니다.")
             st.stop()
 
         # ── 데이터 커버리지 배너 ──
+        # ── S&P 500 데이터: FRED SP500 시리즈로 F&G 전체 기간 확장 ──
+        # CNN API는 1년치만 제공 → FRED SP500 시리즈(일별)로 F&G 전체 기간과 동기화
+        df_sp500 = None
+        fg_start_str = df_fg['date'].min().strftime('%Y-%m-%d')
+        fg_end_str   = df_fg['date'].max().strftime('%Y-%m-%d')
+        with st.spinner("S&P 500 장기 데이터 로딩 중 (FRED SP500)…"):
+            _df_sp_fred = fetch_fred_data(
+                'SP500', FRED_API_KEY, limit=None,
+                start_date=fg_start_str, end_date=fg_end_str
+            )
+            if _df_sp_fred is not None and len(_df_sp_fred) > 0:
+                df_sp500 = (
+                    _df_sp_fred
+                    .rename(columns={'value': 'price'})
+                    .sort_values('date')
+                    .reset_index(drop=True)
+                )
+            else:
+                # FRED 실패 시 CNN 데이터 fallback (1년치)
+                df_sp500 = history_data.get('sp500')
+
+        # ── 데이터 커버리지 배너 (F&G + S&P 500) ──
         src_info = history_data.get('data_source_info', {})
         if src_info:
-            start_d = src_info.get('start_date', '')
-            end_d   = src_info.get('end_date', '')
+            start_d = src_info.get('start_date', fg_start_str)
+            end_d   = src_info.get('end_date',   fg_end_str)
             total   = src_info.get('total_days', len(df_fg))
             has_old = src_info.get('has_old_csv', False)
             years   = round((df_fg['date'].max() - df_fg['date'].min()).days / 365.25, 1)
-            src_tag = "GitHub CSV(2011~) + CNN API" if has_old else "CNN API (시작일 파라미터)"
+            fg_src  = "GitHub CSV(2011~) + CNN API" if has_old else "CNN API"
+            sp_info = (f"S&P 500: FRED SP500 **{len(df_sp500):,}일**"
+                       if df_sp500 is not None else "S&P 500: CNN API (1년)")
             st.success(
                 f"✅ **데이터 로드 완료** | "
-                f"기간: **{start_d} ~ {end_d}** ({years}년) | "
-                f"총 **{total:,}일** | "
-                f"출처: {src_tag}"
+                f"F&G: **{start_d} ~ {end_d}** ({years}년 / {total:,}일) | "
+                f"{sp_info} | 출처: {fg_src}"
             )
 
         # ── 현재 상태 요약 카드 ──
         current_info = history_data.get('current', {})
-        latest_row = df_fg.iloc[-1]
-        latest_score = current_info.get('score', latest_row['score'])
-        latest_rating = current_info.get('rating', latest_row['rating'])
+        latest_row   = df_fg.iloc[-1]
+        # score: float 확보
+        _raw_score   = current_info.get('score', latest_row.get('score', 50))
+        try:
+            latest_score = float(_raw_score)
+        except (TypeError, ValueError):
+            latest_score = 50.0
+        # rating: str 확보 (None/NaN/float 방어)
+        _raw_rating  = current_info.get('rating', latest_row.get('rating', None))
+        if isinstance(_raw_rating, str) and _raw_rating.strip():
+            latest_rating = _raw_rating.strip()
+        else:
+            latest_rating = _score_to_rating(latest_score)
         current_color = rating_to_color(latest_rating)
 
         prev_week  = current_info.get('previous_1_week', None)
