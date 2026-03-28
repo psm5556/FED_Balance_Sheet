@@ -325,6 +325,31 @@ def _get_tabpfn_ts_version() -> tuple:
         return (0, 0, 0), "unknown"
 
 
+def _clean_timeseries_for_tabpfn(values, timestamps):
+    """
+    TabPFN-TS 입력 전처리:
+    - 날짜+값 쌍으로 정렬
+    - 중복 날짜 제거 (최신값 유지)
+    - NaN / None 값 선형보간 + ffill/bfill
+    - 일별 리샘플링 → AutoSeasonalFeature FFT 오류 방지
+    Returns cleaned (values_list, timestamps_list)
+    """
+    dates = pd.to_datetime(list(timestamps))
+    vals  = pd.to_numeric(list(values), errors='coerce')
+
+    s = pd.Series(vals, index=dates, name="target")
+    s = s.sort_index()
+    # 중복 인덱스 제거
+    s = s[~s.index.duplicated(keep='last')]
+    # NaN 보간 (선형 → ffill → bfill 순서)
+    s = s.interpolate(method='time').ffill().bfill()
+    # 일별(B=영업일) 리샘플링으로 규칙적 주기 확보
+    s = s.resample('D').last().ffill()
+    s = s.dropna()
+
+    return s.tolist(), s.index.strftime('%Y-%m-%d').tolist()
+
+
 def _run_tabpfn_v1(values, timestamps, pred_len, item_id, token):
     """tabpfn-time-series >= 1.0.0 API"""
     import tabpfn_client
@@ -335,36 +360,58 @@ def _run_tabpfn_v1(values, timestamps, pred_len, item_id, token):
         TabPFNMode,
     )
     from tabpfn_time_series.data_preparation import generate_test_X
-    from tabpfn_time_series.features import (
-        RunningIndexFeature,
-        CalendarFeature,
-        AutoSeasonalFeature,
-    )
+    from tabpfn_time_series.features import RunningIndexFeature, CalendarFeature
 
     if token:
-        # /tmp 로 경로 리다이렉트 후 토큰 설정
         _patch_tabpfn_token_to_tmp()
         tabpfn_client.set_access_token(token)
 
+    # ── 전처리: 일별 규칙 시계열로 정규화 ──────────────────────────────────
+    clean_vals, clean_dates = _clean_timeseries_for_tabpfn(values, timestamps)
+    if len(clean_vals) < pred_len + 10:
+        raise ValueError(
+            f"전처리 후 데이터가 너무 적습니다 ({len(clean_vals)}행). "
+            "학습 기간을 늘리거나 다른 데이터를 선택하세요."
+        )
+    clean_ts = pd.to_datetime(clean_dates)
+
+    # ── TimeSeriesDataFrame 구성 ────────────────────────────────────────────
     df = pd.DataFrame(
-        {"target": values},
+        {"target": clean_vals},
         index=pd.MultiIndex.from_arrays(
-            [[item_id] * len(timestamps), timestamps],
+            [[item_id] * len(clean_ts), clean_ts],
             names=["item_id", "timestamp"],
         ),
     )
-    tsdf = TimeSeriesDataFrame(df)
+    tsdf  = TimeSeriesDataFrame(df)
     train, _ = tsdf.train_test_split(prediction_length=pred_len)
-    test = generate_test_X(train, pred_len)
+    test  = generate_test_X(train, pred_len)
 
-    features = [RunningIndexFeature(), CalendarFeature(), AutoSeasonalFeature()]
+    # ── 피처 공학: AutoSeasonalFeature 제외
+    #    (FFT 계절 탐지 → None period → int+None TypeError 발생)
+    # RunningIndexFeature + CalendarFeature 만으로도 충분한 성능 확보 ──────
+    features = [RunningIndexFeature(), CalendarFeature()]
+
+    # AutoSeasonalFeature 를 안전하게 추가 (지원 시에만)
+    try:
+        from tabpfn_time_series.features import AutoSeasonalFeature
+        asf = AutoSeasonalFeature()
+        # 사전 fit 으로 period 탐지 가능 여부 확인
+        _tmp_train = train.copy()
+        _tmp_test  = test.copy()
+        _, _ = FeatureTransformer([asf]).transform(_tmp_train, _tmp_test)
+        features.append(AutoSeasonalFeature())  # 성공하면 추가
+    except Exception:
+        pass  # 실패 시 무시 — RunningIndex + Calendar 로만 진행
+
     train, test = FeatureTransformer(features).transform(train, test)
 
+    # ── 예측 ───────────────────────────────────────────────────────────────
     predictor = TabPFNTimeSeriesPredictor(tabpfn_mode=TabPFNMode.CLIENT)
     pred = predictor.predict(train, test)
 
+    # ── 결과 정리 ──────────────────────────────────────────────────────────
     pred_df = pred.reset_index()
-    # timestamp 컬럼명 통일
     ts_candidates = [c for c in pred_df.columns
                      if "time" in str(c).lower() and c != "item_id"]
     if ts_candidates and "timestamp" not in pred_df.columns:
@@ -2260,9 +2307,19 @@ tabpfn-time-series>=1.0.0
                             st.warning(f"{fc_title}: 학습 데이터가 30일 미만입니다.")
                             continue
 
-                        # ── 예측 실행 ──
-                        values_t = tuple(df_src[val_col].tolist())
-                        dates_t  = tuple(df_src["date"].dt.strftime("%Y-%m-%d").tolist())
+                        # ── 예측 실행 전 전처리 (중복·NaN 제거, 일별 정규화) ──
+                        _clean_v, _clean_d = _clean_timeseries_for_tabpfn(
+                            df_src[val_col].tolist(),
+                            df_src["date"].dt.strftime("%Y-%m-%d").tolist(),
+                        )
+                        # 전처리 후 df_src 를 차트용으로도 업데이트
+                        df_src = pd.DataFrame({
+                            "date": pd.to_datetime(_clean_d),
+                            val_col: _clean_v,
+                        })
+
+                        values_t = tuple(_clean_v)
+                        dates_t  = tuple(_clean_d)
 
                         with st.spinner(
                             f"🧠 {fc_title} 예측 중… "
