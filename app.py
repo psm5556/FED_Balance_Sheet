@@ -261,7 +261,8 @@ def _init_tabpfn_client(token: str):
     try:
         import tabpfn_client
         if token:
-            tabpfn_client.init(use_server=True, token=token)
+            # 최신 API: set_access_token() (init(token=...) 은 구버전)
+            tabpfn_client.set_access_token(token)
         return True, None
     except ImportError:
         return False, "tabpfn-client 미설치"
@@ -300,7 +301,9 @@ def _run_tabpfn_v1(values, timestamps, pred_len, item_id, token):
     )
 
     if token:
-        tabpfn_client.init(use_server=True, token=token)
+        # 최신 tabpfn-client API: set_access_token()
+        # 구버전 init(use_server=True, token=token) 은 deprecated
+        tabpfn_client.set_access_token(token)
 
     df = pd.DataFrame(
         {"target": values},
