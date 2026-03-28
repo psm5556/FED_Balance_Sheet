@@ -380,7 +380,7 @@ def _run_tabpfn_v1(values, timestamps, pred_len, item_id, token):
         TabPFNTimeSeriesPredictor,
         TabPFNMode,
     )
-    from tabpfn_time_series.data_preparation import generate_test_X, train_test_split as ts_split
+    from tabpfn_time_series.data_preparation import generate_test_X
     from tabpfn_time_series.features import RunningIndexFeature, CalendarFeature
 
     if token:
@@ -411,8 +411,22 @@ def _run_tabpfn_v1(values, timestamps, pred_len, item_id, token):
     test  = generate_test_X(train, pred_len)
 
     # 과거 검증용(backtesting): 마지막 pred_len 행을 제외하고 학습 → 그 기간 예측
+    # train_test_split 은 v1.0.9 에 없으므로 직접 슬라이싱 후 generate_test_X 로 test 생성
     try:
-        train_bt, test_bt = ts_split(full_tsdf, pred_len)
+        if len(clean_vals) > pred_len:
+            bt_vals  = clean_vals[:-pred_len]
+            bt_dates = clean_ts[:-pred_len]
+            df_bt = pd.DataFrame(
+                {"target": bt_vals},
+                index=pd.MultiIndex.from_arrays(
+                    [[item_id] * len(bt_dates), bt_dates],
+                    names=["item_id", "timestamp"],
+                ),
+            )
+            train_bt = TimeSeriesDataFrame(df_bt)
+            test_bt  = generate_test_X(train_bt, pred_len)
+        else:
+            train_bt, test_bt = None, None
     except Exception:
         train_bt, test_bt = None, None
 
