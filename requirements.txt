@@ -12,4 +12,5 @@ requests>=2.32.2
  
 # ── TabPFN-TS 예측 ──────────────────────────────────────────────────────
 # v1.x 이상: CLIENT 모드(Cloud API), 신뢰구간 포함, GPU 불필요
-tabpfn-time-series>=1.0.0
+# tabpfn-time-series>=1.0.0
+tabpfn
