@@ -270,6 +270,103 @@ def _init_tabpfn_client(token: str):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def _get_tabpfn_ts_version() -> tuple:
+    """tabpfn-time-series 설치 버전 반환 (major, minor, patch)"""
+    try:
+        import importlib.metadata
+        ver = importlib.metadata.version("tabpfn-time-series")
+        parts = [int(x) for x in ver.split(".")[:3]]
+        while len(parts) < 3:
+            parts.append(0)
+        return tuple(parts), ver
+    except Exception:
+        return (0, 0, 0), "unknown"
+
+
+def _run_tabpfn_v1(values, timestamps, pred_len, item_id, token):
+    """tabpfn-time-series >= 1.0.0 API"""
+    import tabpfn_client
+    from tabpfn_time_series import (
+        TimeSeriesDataFrame,
+        FeatureTransformer,
+        TabPFNTimeSeriesPredictor,
+        TabPFNMode,
+    )
+    from tabpfn_time_series.data_preparation import generate_test_X
+    from tabpfn_time_series.features import (
+        RunningIndexFeature,
+        CalendarFeature,
+        AutoSeasonalFeature,
+    )
+
+    if token:
+        tabpfn_client.init(use_server=True, token=token)
+
+    df = pd.DataFrame(
+        {"target": values},
+        index=pd.MultiIndex.from_arrays(
+            [[item_id] * len(timestamps), timestamps],
+            names=["item_id", "timestamp"],
+        ),
+    )
+    tsdf = TimeSeriesDataFrame(df)
+    train, _ = tsdf.train_test_split(prediction_length=pred_len)
+    test = generate_test_X(train, pred_len)
+
+    features = [RunningIndexFeature(), CalendarFeature(), AutoSeasonalFeature()]
+    train, test = FeatureTransformer(features).transform(train, test)
+
+    predictor = TabPFNTimeSeriesPredictor(tabpfn_mode=TabPFNMode.CLIENT)
+    pred = predictor.predict(train, test)
+
+    pred_df = pred.reset_index()
+    # timestamp 컬럼명 통일
+    ts_candidates = [c for c in pred_df.columns
+                     if "time" in str(c).lower() and c != "item_id"]
+    if ts_candidates and "timestamp" not in pred_df.columns:
+        pred_df = pred_df.rename(columns={ts_candidates[0]: "timestamp"})
+    pred_df["timestamp"] = pd.to_datetime(pred_df["timestamp"])
+    return pred_df
+
+
+def _run_tabpfn_v0(values, timestamps, pred_len, token):
+    """tabpfn-time-series 0.x (구버전) API — TabPFNTimeSeriesPredictor만 존재"""
+    from tabpfn_time_series import TabPFNTimeSeriesPredictor
+
+    # v0.x는 DatetimeIndex Series를 직접 입력으로 받음
+    train_series = pd.Series(
+        values[:-pred_len] if len(values) > pred_len else values,
+        index=pd.DatetimeIndex(timestamps[:-pred_len] if len(timestamps) > pred_len else timestamps),
+    )
+
+    predictor = TabPFNTimeSeriesPredictor()
+
+    # fit_predict 또는 predict 메서드 탐색 (버전에 따라 다름)
+    if hasattr(predictor, "fit_predict"):
+        preds = predictor.fit_predict(train_series, prediction_length=pred_len)
+    elif hasattr(predictor, "fit") and hasattr(predictor, "predict"):
+        predictor.fit(train_series)
+        preds = predictor.predict(prediction_length=pred_len)
+    else:
+        raise RuntimeError("v0.x TabPFNTimeSeriesPredictor에서 예측 메서드를 찾을 수 없습니다.")
+
+    # 결과를 표준 형식으로 변환
+    if isinstance(preds, pd.Series):
+        pred_df = preds.reset_index()
+        pred_df.columns = ["timestamp", "target"]
+    elif isinstance(preds, pd.DataFrame):
+        pred_df = preds.reset_index() if preds.index.name else preds.copy()
+        if "timestamp" not in pred_df.columns:
+            pred_df = pred_df.rename(columns={pred_df.columns[0]: "timestamp"})
+        if "target" not in pred_df.columns and len(pred_df.columns) >= 2:
+            pred_df = pred_df.rename(columns={pred_df.columns[1]: "target"})
+    else:
+        raise RuntimeError(f"예상치 못한 예측 결과 타입: {type(preds)}")
+
+    pred_df["timestamp"] = pd.to_datetime(pred_df["timestamp"])
+    return pred_df
+
+
 def run_tabpfn_forecast(
     values_tuple: tuple,
     dates_tuple: tuple,
@@ -279,71 +376,59 @@ def run_tabpfn_forecast(
 ) -> tuple:
     """
     TabPFN-TS 시계열 예측 실행.
+    v1.x(CLIENT 모드, 신뢰구간 포함)와 v0.x(기본 포인트 예측) 모두 지원.
 
     Returns
     -------
     (pred_df, error_msg) — 성공 시 error_msg=None
-    pred_df columns: timestamp, target, 0.1, 0.25, 0.5, 0.75, 0.9
+    pred_df columns: timestamp, target [, 0.1, 0.25, 0.5, 0.75, 0.9]
     """
-    try:
-        import tabpfn_client
-        from tabpfn_time_series import (
-            TimeSeriesDataFrame,
-            FeatureTransformer,
-            TabPFNTimeSeriesPredictor,
-            TabPFNMode,
-        )
-        from tabpfn_time_series.data_preparation import generate_test_X
-        from tabpfn_time_series.features import (
-            RunningIndexFeature,
-            CalendarFeature,
-            AutoSeasonalFeature,
-        )
+    # ── 버전 확인 ──
+    (major, minor, _), ver_str = _get_tabpfn_ts_version()
 
-        # 인증
-        if token:
-            tabpfn_client.init(use_server=True, token=token)
-
-        # DataFrame 구성 (MultiIndex: item_id × timestamp)
-        timestamps = pd.to_datetime(list(dates_tuple))
-        values = list(values_tuple)
-        df = pd.DataFrame(
-            {"target": values},
-            index=pd.MultiIndex.from_arrays(
-                [[item_id] * len(timestamps), timestamps],
-                names=["item_id", "timestamp"],
-            ),
-        )
-        tsdf = TimeSeriesDataFrame(df)
-
-        # train/test split
-        train, _ = tsdf.train_test_split(prediction_length=pred_len)
-        test = generate_test_X(train, pred_len)
-
-        # 특성 공학
-        features = [RunningIndexFeature(), CalendarFeature(), AutoSeasonalFeature()]
-        train, test = FeatureTransformer(features).transform(train, test)
-
-        # 예측 (quantile 포함)
-        predictor = TabPFNTimeSeriesPredictor(tabpfn_mode=TabPFNMode.CLIENT)
-        pred = predictor.predict(train, test)
-
-        pred_df = pred.reset_index()
-        # timestamp 컬럼 통일
-        if "timestamp" not in pred_df.columns and "item_id" in pred_df.columns:
-            pred_df = pred_df.rename(
-                columns={c: "timestamp" for c in pred_df.columns if "time" in str(c).lower() and c != "timestamp"}
-            )
-        pred_df["timestamp"] = pd.to_datetime(pred_df["timestamp"])
-        return pred_df, None
-
-    except ImportError:
+    if major == 0 and minor == 0:
         return None, (
-            "tabpfn-time-series 패키지가 설치되지 않았습니다.\n"
-            "requirements.txt에 `tabpfn-time-series` 를 추가하고 앱을 재배포하세요."
+            "❌ tabpfn-time-series 패키지를 찾을 수 없습니다.\n"
+            "requirements.txt에 아래 내용을 추가하고 재배포하세요:\n"
+            "```\ntabpfn-time-series>=1.0.0\n```"
+        )
+
+    timestamps = pd.to_datetime(list(dates_tuple))
+    values     = list(values_tuple)
+
+    # ── v1.x 경로 ──
+    if major >= 1:
+        try:
+            pred_df = _run_tabpfn_v1(values, timestamps, pred_len, item_id, token)
+            return pred_df, None
+        except ImportError as e:
+            return None, (
+                f"❌ tabpfn-time-series {ver_str} 에서 필요한 모듈을 찾을 수 없습니다.\n"
+                f"오류 상세: {e}\n\n"
+                f"requirements.txt를 아래와 같이 업데이트하세요:\n"
+                f"```\ntabpfn-time-series>=1.0.0\n```"
+            )
+        except Exception as e:
+            return None, f"❌ 예측 실패 (v{ver_str}): {str(e)}"
+
+    # ── v0.x 경로 (구버전 fallback) ──
+    try:
+        pred_df = _run_tabpfn_v0(values, timestamps, pred_len, token)
+        return pred_df, None
+    except ImportError as e:
+        return None, (
+            f"❌ tabpfn-time-series {ver_str} (구버전) — 임포트 실패\n"
+            f"오류: {e}\n\n"
+            "신뢰구간 예측을 위해 1.x 버전으로 업그레이드를 권장합니다:\n"
+            "```\ntabpfn-time-series>=1.0.0\n```"
         )
     except Exception as e:
-        return None, f"예측 실패: {str(e)}"
+        return None, (
+            f"❌ 예측 실패 (tabpfn-time-series {ver_str} 구버전)\n"
+            f"오류: {str(e)}\n\n"
+            "💡 v1.x로 업그레이드하면 신뢰구간 예측 및 더 나은 정확도를 사용할 수 있습니다:\n"
+            "requirements.txt → `tabpfn-time-series>=1.0.0`"
+        )
 
 
 def create_forecast_chart(
@@ -2001,6 +2086,26 @@ def main():
             "Zero-Shot 시계열 예측 · 신뢰구간 포함"
         )
 
+        # ── 설치 버전 확인 ──
+        (ts_major, ts_minor, _), ts_ver_str = _get_tabpfn_ts_version()
+        ts_installed = (ts_major, ts_minor) != (0, 0)
+
+        if not ts_installed:
+            st.error(
+                "❌ `tabpfn-time-series` 패키지가 설치되지 않았습니다.  "
+                "requirements.txt에 아래 줄을 추가하고 재배포하세요."
+            )
+            st.code("tabpfn-time-series>=1.0.0", language="text")
+        elif ts_major < 1:
+            st.warning(
+                f"⚠️ 설치된 버전 **tabpfn-time-series=={ts_ver_str}** 은 구버전입니다.  "
+                f"포인트 예측만 지원되며 신뢰구간이 없습니다.  "
+                f"신뢰구간·최신 API를 사용하려면 아래와 같이 업그레이드하세요."
+            )
+            st.code("tabpfn-time-series>=1.0.0", language="text")
+        else:
+            st.success(f"✅ tabpfn-time-series **{ts_ver_str}** 설치됨 · 신뢰구간 예측 지원")
+
         if not TABPFN_TOKEN:
             st.warning(
                 "⚠️ TabPFN 예측을 사용하려면 Streamlit Secrets에 "
@@ -2019,17 +2124,17 @@ FRED_API_KEY      = "your_fred_key"
 TABPFN_API_TOKEN  = "your_tabpfn_token"
 ```
 
-**③ requirements.txt 에 추가**
+**③ requirements.txt 업데이트**
 ```
-tabpfn-time-series
+tabpfn-time-series>=1.0.0
 ```
 
 **기능 설명:**
 - Fear & Greed Index 및 S&P 500 의 미래 N일을 AI로 예측
-- 80% 신뢰구간 (10%~90%) 및 50% 신뢰구간 (25%~75%) 자동 표시
+- 80% 신뢰구간 (10%~90%) 및 50% 신뢰구간 (25%~75%) 자동 표시 (v1.x 이상)
 - GPU 불필요 · TabPFN Cloud API 사용
                 """)
-        else:
+        elif ts_installed:
             # ── 컨트롤 ──
             fc_c1, fc_c2, fc_c3, fc_c4 = st.columns(4)
             with fc_c1:
@@ -2062,12 +2167,13 @@ tabpfn-time-series
                     use_container_width=True,
                 )
 
+            ci_note = "예측값 + 80%·50% 신뢰구간" if ts_major >= 1 else "예측값만 (신뢰구간은 v1.x 이상)"
             # ── 예측 정보 배너 ──
             st.info(
                 f"📋 학습: 최근 **{'전체' if train_window==0 else f'{train_window}일'}** 데이터 → "
                 f"미래 **{pred_len}일** 예측 | "
-                f"모델: TabPFN-TS (tabpfn-client Cloud API) | "
-                f"예측값 + 80%·50% 신뢰구간 표시"
+                f"모델: TabPFN-TS v{ts_ver_str} | "
+                f"{ci_note}"
             )
 
             if run_btn:
