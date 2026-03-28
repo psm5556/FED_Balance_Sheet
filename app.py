@@ -821,22 +821,16 @@ def rating_to_color(rating) -> str:
     return mapping.get(str(rating).lower().strip(), '#9ca3af')
 
 def create_fg_history_chart(df_fg, df_sp500=None):
-    """Fear & Greed 히스토리 메인 차트 (색상 구간 + S&P500 오버레이)"""
+    """Fear & Greed 히스토리 메인 차트 (색상 구간 + S&P500 이중 y축 오버레이)"""
     if df_fg is None or len(df_fg) == 0:
         return None
 
-    if df_sp500 is not None and len(df_sp500) > 0:
-        fig = make_subplots(
-            rows=2, cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.06,
-            row_heights=[0.65, 0.35],
-            subplot_titles=("Fear & Greed Index 히스토리", "S&P 500")
-        )
-    else:
-        fig = make_subplots(rows=1, cols=1)
+    has_sp500 = df_sp500 is not None and len(df_sp500) > 0
 
-    # 배경 구간 색상
+    # 이중 y축 단일 차트
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # 배경 구간 색상 (주축 기준 0~100)
     zones = [
         (0, 25,   'rgba(220,38,38,0.08)',   'Extreme Fear'),
         (25, 45,  'rgba(249,115,22,0.08)',  'Fear'),
@@ -853,17 +847,31 @@ def create_fg_history_chart(df_fg, df_sp500=None):
             annotation_position="left",
             annotation_font_size=10,
             annotation_font_color='rgba(200,200,200,0.5)',
-            row=1, col=1
         )
 
     # 기준선
     for lvl in [25, 45, 55, 75]:
         fig.add_hline(
             y=lvl, line_dash="dot", line_color="rgba(150,150,150,0.3)",
-            line_width=1, row=1, col=1
+            line_width=1,
         )
 
-    # Fear & Greed 라인 (점수에 따라 색상 그라디언트 표현)
+    # S&P 500 — 보조 y축 (먼저 추가해 레이어 순서상 뒤에 위치)
+    if has_sp500:
+        fig.add_trace(
+            go.Scatter(
+                x=df_sp500['date'],
+                y=df_sp500['price'],
+                mode='lines',
+                name='S&P 500',
+                line=dict(color='#f59e0b', width=1.5),
+                opacity=0.85,
+                hovertemplate='<b>%{x|%Y-%m-%d}</b><br>S&P 500: <b>%{y:,.0f}</b><extra></extra>'
+            ),
+            secondary_y=True,
+        )
+
+    # Fear & Greed 라인 — 주 y축
     fig.add_trace(
         go.Scatter(
             x=df_fg['date'],
@@ -879,10 +887,10 @@ def create_fg_history_chart(df_fg, df_sp500=None):
                 '<extra></extra>'
             )
         ),
-        row=1, col=1
+        secondary_y=False,
     )
 
-    # 최신값 마커
+    # 최신값 마커 — 주 y축
     latest = df_fg.iloc[-1]
     fig.add_trace(
         go.Scatter(
@@ -901,41 +909,28 @@ def create_fg_history_chart(df_fg, df_sp500=None):
             textfont=dict(color='white', size=12),
             hovertemplate='현재값: %{y:.1f}<extra></extra>'
         ),
-        row=1, col=1
+        secondary_y=False,
     )
 
-    # S&P 500 오버레이
-    if df_sp500 is not None and len(df_sp500) > 0:
-        fig.add_trace(
-            go.Scatter(
-                x=df_sp500['date'],
-                y=df_sp500['price'],
-                mode='lines',
-                name='S&P 500',
-                line=dict(color='#f59e0b', width=1.5),
-                hovertemplate='<b>%{x|%Y-%m-%d}</b><br>S&P 500: %{y:,.0f}<extra></extra>'
-            ),
-            row=2, col=1
-        )
-
+    # y축 설정
     fig.update_yaxes(
         title_text="Fear & Greed Index",
         range=[0, 100],
         gridcolor='rgba(75,75,75,0.3)',
-        color='white',
-        row=1, col=1
+        color='#60a5fa',
+        secondary_y=False,
     )
-    if df_sp500 is not None:
+    if has_sp500:
         fig.update_yaxes(
             title_text="S&P 500",
-            gridcolor='rgba(75,75,75,0.3)',
-            color='white',
-            row=2, col=1
+            gridcolor='rgba(0,0,0,0)',  # 보조축 그리드 숨김 (주축과 중복 방지)
+            color='#f59e0b',
+            secondary_y=True,
         )
 
     fig.update_xaxes(
         gridcolor='rgba(75,75,75,0.3)',
-        color='white'
+        color='white',
     )
 
     fig.update_layout(
@@ -943,7 +938,7 @@ def create_fg_history_chart(df_fg, df_sp500=None):
         paper_bgcolor='#0e1117',
         font=dict(color='white'),
         hovermode='x unified',
-        height=650 if df_sp500 is not None else 450,
+        height=450,
         showlegend=True,
         legend=dict(
             orientation='h',
@@ -951,7 +946,7 @@ def create_fg_history_chart(df_fg, df_sp500=None):
             xanchor='right', x=1,
             font=dict(color='white')
         ),
-        margin=dict(l=60, r=60, t=60, b=40)
+        margin=dict(l=70, r=70, t=60, b=40)
     )
 
     return fig
