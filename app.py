@@ -255,62 +255,45 @@ def fetch_fear_greed_full_history():
 
 # ==================== TabPFN-TS 예측 함수 ====================
 
-# Streamlit Cloud에서 tabpfn_client 토큰 파일 경로 리다이렉트
-# 패키지 디렉토리(site-packages)는 읽기 전용이므로 /tmp 를 사용
-_TABPFN_TOKEN_DIR  = "/tmp/tabpfn_client_auth"
-_TABPFN_TOKEN_FILE = _TABPFN_TOKEN_DIR + "/.tabpfn"
+# ── tabpfn_client 토큰 경로를 /tmp 로 리다이렉트 ──────────────────────────
+# tabpfn_client/constants.py:  CACHE_DIR = Path(__file__).parent / ".tabpfn"
+# tabpfn_client/service_wrapper.py:
+#   class UserAuthenticationClient:
+#       CACHED_TOKEN_FILE = CACHE_DIR / "config"   ← 이 클래스 변수를 패치
+#
+# Streamlit Cloud 의 site-packages 는 읽기 전용이므로 /tmp 로 우회.
+# ─────────────────────────────────────────────────────────────────────────────
 
-def _redirect_tabpfn_token_path():
+def _patch_tabpfn_token_to_tmp():
     """
-    tabpfn_client 가 토큰을 저장하는 경로를 /tmp 로 리다이렉트.
-    패키지 내부 여러 위치에서 파일 경로 변수를 탐색해 모두 패치.
+    tabpfn_client.service_wrapper.UserAuthenticationClient.CACHED_TOKEN_FILE
+    과 tabpfn_client.constants.CACHE_DIR 을 /tmp 쓰기 가능 경로로 교체.
+    set_access_token() 호출 직전에 실행해야 함.
     """
-    import os, sys, pathlib
-    os.makedirs(_TABPFN_TOKEN_DIR, exist_ok=True)
+    import pathlib
+    import os
 
-    # 패치 대상 후보: 모듈명 + 속성명 쌍
-    candidates = [
-        ("tabpfn_client.tabpfn_common_utils.utils", ["CACHED_TOKEN_FILE"]),
-        ("tabpfn_client._config",                   ["TOKEN_FILE", "CACHED_TOKEN_FILE"]),
-        ("tabpfn_client.config",                    ["TOKEN_FILE", "CACHED_TOKEN_FILE"]),
-        ("tabpfn_client",                           ["TOKEN_FILE", "CACHED_TOKEN_FILE",
-                                                     "_TOKEN_FILE", "token_file"]),
-    ]
-    patched_any = False
-    for mod_name, attrs in candidates:
-        try:
-            import importlib
-            mod = importlib.import_module(mod_name)
-            for attr in attrs:
-                if hasattr(mod, attr):
-                    old_val = getattr(mod, attr)
-                    # Path 또는 str 형태 모두 처리
-                    if isinstance(old_val, pathlib.Path):
-                        setattr(mod, attr, pathlib.Path(_TABPFN_TOKEN_FILE))
-                    else:
-                        setattr(mod, attr, _TABPFN_TOKEN_FILE)
-                    patched_any = True
-        except Exception:
-            continue
+    tmp_dir  = pathlib.Path("/tmp/tabpfn_auth")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_file = tmp_dir / "config"
 
-    # 이미 로드된 모든 tabpfn_client 서브모듈도 스캔
-    for mod_name, mod in list(sys.modules.items()):
-        if mod is None or "tabpfn_client" not in mod_name:
-            continue
-        for attr in ["CACHED_TOKEN_FILE", "TOKEN_FILE", "_token_file"]:
-            try:
-                old_val = getattr(mod, attr, None)
-                if old_val is None:
-                    continue
-                if isinstance(old_val, pathlib.Path):
-                    setattr(mod, attr, pathlib.Path(_TABPFN_TOKEN_FILE))
-                else:
-                    setattr(mod, attr, _TABPFN_TOKEN_FILE)
-                patched_any = True
-            except Exception:
-                continue
+    # 1) service_wrapper.UserAuthenticationClient.CACHED_TOKEN_FILE 직접 패치
+    try:
+        from tabpfn_client.service_wrapper import UserAuthenticationClient
+        import tabpfn_client.service_wrapper as sw
+        UserAuthenticationClient.CACHED_TOKEN_FILE = tmp_file
+        sw.CACHE_DIR = tmp_dir          # 모듈 레벨 변수도 교체
+    except Exception:
+        pass
 
-    return patched_any
+    # 2) constants.CACHE_DIR 패치 (다른 모듈에서 임포트하는 경우 대비)
+    try:
+        import tabpfn_client.constants as const
+        const.CACHE_DIR = tmp_dir
+    except Exception:
+        pass
+
+    return tmp_file
 
 
 @st.cache_resource
@@ -319,7 +302,7 @@ def _init_tabpfn_client(token: str):
     try:
         import tabpfn_client
         if token:
-            _redirect_tabpfn_token_path()
+            _patch_tabpfn_token_to_tmp()
             tabpfn_client.set_access_token(token)
         return True, None
     except ImportError:
@@ -360,7 +343,7 @@ def _run_tabpfn_v1(values, timestamps, pred_len, item_id, token):
 
     if token:
         # /tmp 로 경로 리다이렉트 후 토큰 설정
-        _redirect_tabpfn_token_path()
+        _patch_tabpfn_token_to_tmp()
         tabpfn_client.set_access_token(token)
 
     df = pd.DataFrame(
