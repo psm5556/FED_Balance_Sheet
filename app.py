@@ -255,54 +255,75 @@ def fetch_fear_greed_full_history():
 
 # ==================== TabPFN-TS 예측 함수 ====================
 
-# ── tabpfn_client 토큰 경로를 /tmp 로 리다이렉트 ──────────────────────────
-# tabpfn_client/constants.py:  CACHE_DIR = Path(__file__).parent / ".tabpfn"
-# tabpfn_client/service_wrapper.py:
-#   class UserAuthenticationClient:
-#       CACHED_TOKEN_FILE = CACHE_DIR / "config"   ← 이 클래스 변수를 패치
+# ── tabpfn_client 토큰 파일 경로 자동 설정 ────────────────────────────────
+# tabpfn_client 는 토큰을 site-packages 안에 저장하려 함 (읽기 전용일 수 있음)
+# → 쓰기 가능한 경로를 탐색해 UserAuthenticationClient.CACHED_TOKEN_FILE 패치
 #
-# Streamlit Cloud 의 site-packages 는 읽기 전용이므로 /tmp 로 우회.
+# 우선순위:
+#   1. ~/.tabpfn/config         ← 로컬 PC: 홈 디렉토리 (재시작 후에도 유지)
+#   2. /tmp/tabpfn_auth/config  ← Streamlit Cloud: 임시 디렉토리
+#   3. 기본값 그대로             ← 이미 쓰기 가능한 경우
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _patch_tabpfn_token_to_tmp():
+def _patch_tabpfn_token_path():
     """
-    tabpfn_client.service_wrapper.UserAuthenticationClient.CACHED_TOKEN_FILE
-    과 tabpfn_client.constants.CACHE_DIR 을 /tmp 쓰기 가능 경로로 교체.
-    set_access_token() 호출 직전에 실행해야 함.
+    tabpfn_client 토큰 저장 경로를 쓰기 가능한 위치로 자동 설정.
+    로컬 PC: ~/.tabpfn/config (홈 디렉토리, 영구 보존)
+    Streamlit Cloud: /tmp/tabpfn_auth/config (임시, 매 재시작 초기화)
     """
-    import pathlib
-    import os
+    import pathlib, os
 
-    tmp_dir  = pathlib.Path("/tmp/tabpfn_auth")
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-    tmp_file = tmp_dir / "config"
+    # ① 쓰기 가능 경로 후보 (우선순위 순)
+    candidates = [
+        pathlib.Path.home() / ".tabpfn",          # 로컬 PC
+        pathlib.Path("/tmp") / "tabpfn_auth",      # Streamlit Cloud
+        pathlib.Path(os.getcwd()) / ".tabpfn",     # 현재 디렉토리 fallback
+    ]
 
-    # 1) service_wrapper.UserAuthenticationClient.CACHED_TOKEN_FILE 직접 패치
+    chosen_dir = None
+    for d in candidates:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            probe = d / "_write_probe"
+            probe.write_text("ok")
+            probe.unlink()
+            chosen_dir = d
+            break
+        except Exception:
+            continue
+
+    if chosen_dir is None:
+        # 모두 실패하면 기본 경로 그대로 (로컬 일반 설치에서는 동작)
+        return None
+
+    token_file = chosen_dir / "config"
+
+    # ② UserAuthenticationClient.CACHED_TOKEN_FILE 직접 패치
     try:
         from tabpfn_client.service_wrapper import UserAuthenticationClient
         import tabpfn_client.service_wrapper as sw
-        UserAuthenticationClient.CACHED_TOKEN_FILE = tmp_file
-        sw.CACHE_DIR = tmp_dir          # 모듈 레벨 변수도 교체
+        UserAuthenticationClient.CACHED_TOKEN_FILE = token_file
+        sw.CACHE_DIR = chosen_dir
     except Exception:
         pass
 
-    # 2) constants.CACHE_DIR 패치 (다른 모듈에서 임포트하는 경우 대비)
+    # ③ constants.CACHE_DIR 패치
     try:
         import tabpfn_client.constants as const
-        const.CACHE_DIR = tmp_dir
+        const.CACHE_DIR = chosen_dir
     except Exception:
         pass
 
-    return tmp_file
+    return token_file
 
 
 @st.cache_resource
 def _init_tabpfn_client(token: str):
-    """tabpfn-client 초기화 (앱 세션당 1회) — /tmp 로 토큰 경로 리다이렉트"""
+    """tabpfn-client 초기화 (앱 세션당 1회) — 환경에 맞는 토큰 경로 자동 설정"""
     try:
         import tabpfn_client
         if token:
-            _patch_tabpfn_token_to_tmp()
+            _patch_tabpfn_token_path()
             tabpfn_client.set_access_token(token)
         return True, None
     except ImportError:
@@ -363,7 +384,7 @@ def _run_tabpfn_v1(values, timestamps, pred_len, item_id, token):
     from tabpfn_time_series.features import RunningIndexFeature, CalendarFeature
 
     if token:
-        _patch_tabpfn_token_to_tmp()
+        _patch_tabpfn_token_path()
         tabpfn_client.set_access_token(token)
 
     # ── 전처리: 일별 규칙 시계열로 정규화 ──────────────────────────────────
