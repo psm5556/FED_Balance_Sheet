@@ -396,7 +396,12 @@ def _run_tabpfn_v1(values, timestamps, pred_len, item_id, token):
         )
     clean_ts = pd.to_datetime(clean_dates)
 
-    # ── TimeSeriesDataFrame 구성 ────────────────────────────────────────────
+    # ── TimeSeriesDataFrame 구성 ─────────────────────────────────────────────
+    # 핵심: train_test_split 을 쓰지 않고 전체 데이터를 학습에 사용.
+    # train_test_split(pred_len) 을 쓰면 마지막 pred_len 행을 잘라내
+    # 이미 존재하는 과거 기간을 예측하게 됨 (backtesting 모드).
+    # 전체 데이터를 train 으로 넘기면 generate_test_X 가 마지막 날짜
+    # 이후의 미래 날짜를 생성 → 진짜 미래 예측이 가능.
     df = pd.DataFrame(
         {"target": clean_vals},
         index=pd.MultiIndex.from_arrays(
@@ -404,9 +409,8 @@ def _run_tabpfn_v1(values, timestamps, pred_len, item_id, token):
             names=["item_id", "timestamp"],
         ),
     )
-    tsdf  = TimeSeriesDataFrame(df)
-    train, _ = tsdf.train_test_split(prediction_length=pred_len)
-    test  = generate_test_X(train, pred_len)
+    train = TimeSeriesDataFrame(df)          # 전체 = 학습 데이터
+    test  = generate_test_X(train, pred_len) # 마지막 날짜 이후 미래 pred_len 일
 
     # ── 피처 공학: AutoSeasonalFeature 제외
     #    (FFT 계절 탐지 → None period → int+None TypeError 발생)
@@ -602,14 +606,34 @@ def create_forecast_chart(
                           annotation_font_size=9,
                           annotation_font_color="rgba(200,200,200,0.4)")
 
-    # 히스토리 (마지막 90일)
+    # ── 히스토리: 최근 120일만 표시 (미래 예측과 연결이 잘 보이도록) ────────
+    last_date   = df_hist["date"].max()
+    first_date  = pred_df["date"].min()   # 예측 시작일 (미래)
+
+    # 예측이 실제로 미래에 있는지 확인
+    is_future   = first_date > last_date
+
+    # 히스토리는 최근 120일
     df_tail = df_hist[["date", hist_col]].dropna().tail(120).copy()
+
     fig.add_trace(go.Scatter(
         x=df_tail["date"], y=df_tail[hist_col],
         mode="lines", name="실제 데이터",
         line=dict(color="#60a5fa", width=2),
         hovertemplate="<b>%{x|%Y-%m-%d}</b><br>실제: <b>%{y:.2f}</b><extra></extra>",
     ))
+
+    # 히스토리 마지막 점 → 예측 첫 점 연결선 (시각적 연속성)
+    if is_future and len(df_tail) > 0:
+        connect_x = [df_tail["date"].iloc[-1], pred_df["date"].iloc[0]]
+        connect_y = [df_tail[hist_col].iloc[-1], pred_df[point_col].iloc[0]]
+        fig.add_trace(go.Scatter(
+            x=connect_x, y=connect_y,
+            mode="lines", name="_연결선",
+            line=dict(color="#fbbf24", width=1.5, dash="dot"),
+            showlegend=False,
+            hoverinfo="skip",
+        ))
 
     # 신뢰구간 10%~90% (연한 밴드)
     if q10 is not None and q90 is not None:
@@ -635,30 +659,42 @@ def create_forecast_chart(
             hoverinfo="skip",
         ))
 
-    # 예측 포인트 라인
+    # 미래 예측 포인트 라인
     fig.add_trace(go.Scatter(
         x=pred_df["date"], y=pred_df[point_col],
-        mode="lines+markers", name="TabPFN-TS 예측",
-        line=dict(color="#fbbf24", width=2.5, dash="dash"),
-        marker=dict(size=5, color="#fbbf24",
+        mode="lines+markers",
+        name=f"{'미래 예측 ' if is_future else ''}TabPFN-TS",
+        line=dict(color="#fbbf24", width=2.5, dash="dash" if not is_future else "solid"),
+        marker=dict(size=6, color="#fbbf24",
                     line=dict(color="white", width=1)),
         hovertemplate="<b>%{x|%Y-%m-%d}</b><br>예측: <b>%{y:.2f}</b><extra></extra>",
     ))
 
-    # 예측 시작 수직선
-    split_date = df_hist["date"].max()
+    # 오늘(마지막 실제 데이터) 기준 수직선 — 과거/미래 구분선
+    today_label = last_date.strftime("%m/%d")
     fig.add_vline(
-        x=split_date.timestamp() * 1000,
-        line_dash="dot", line_color="rgba(255,255,255,0.35)", line_width=1.5,
-        annotation_text="  예측 시작",
-        annotation_position="top right",
-        annotation_font_color="rgba(200,200,200,0.7)",
+        x=last_date.timestamp() * 1000,
+        line_dash="solid", line_color="rgba(255,255,255,0.5)", line_width=1.5,
+        annotation_text=f"  ← 실제  |  예측 →   ({today_label})",
+        annotation_position="top",
+        annotation_font_color="rgba(220,220,220,0.85)",
         annotation_font_size=11,
     )
 
+    # x축 범위: 히스토리 시작 ~ 예측 마지막 + 여유
+    x_start = df_tail["date"].min() if len(df_tail) > 0 else last_date - pd.Timedelta(days=120)
+    x_end   = pred_df["date"].max() + pd.Timedelta(days=3)
+
     fig.update_layout(
-        title=dict(text=title, font=dict(color="white", size=15)),
-        xaxis=dict(color="white", gridcolor="rgba(75,75,75,0.3)"),
+        title=dict(
+            text=f"{title}  <span style='font-size:12px;color:#fbbf24;'>{'▶ 미래 예측' if is_future else '⚠ 과거 기간 예측'}</span>",
+            font=dict(color="white", size=15)
+        ),
+        xaxis=dict(
+            color="white",
+            gridcolor="rgba(75,75,75,0.3)",
+            range=[x_start, x_end],
+        ),
         yaxis=dict(
             title=y_label, color="white",
             gridcolor="rgba(75,75,75,0.3)",
@@ -668,13 +704,13 @@ def create_forecast_chart(
         paper_bgcolor="#0e1117",
         font=dict(color="white"),
         hovermode="x unified",
-        height=430,
+        height=450,
         showlegend=True,
         legend=dict(
-            orientation="h", y=1.02, x=1, xanchor="right",
+            orientation="h", y=1.05, x=1, xanchor="right",
             font=dict(color="white", size=11),
         ),
-        margin=dict(l=60, r=40, t=65, b=40),
+        margin=dict(l=60, r=40, t=75, b=40),
     )
     return fig
 
