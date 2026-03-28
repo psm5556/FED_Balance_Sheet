@@ -4,6 +4,7 @@ import requests
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import numpy as np
 
 # 페이지 설정
 st.set_page_config(
@@ -371,6 +372,300 @@ def _clean_timeseries_for_tabpfn(values, timestamps):
     return s.tolist(), s.index.strftime('%Y-%m-%d').tolist()
 
 
+def _calculate_accuracy_metrics(actuals, predictions):
+    """
+    예측 정확도 지표 계산
+    
+    Parameters
+    ----------
+    actuals : array-like
+        실제값
+    predictions : array-like
+        예측값
+    
+    Returns
+    -------
+    dict with RMSE, MAE, MAPE, R²
+    """
+    import numpy as np
+    from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+    
+    actuals = np.array(actuals)
+    predictions = np.array(predictions)
+    
+    # NaN 제거
+    mask = ~(np.isnan(actuals) | np.isnan(predictions))
+    actuals = actuals[mask]
+    predictions = predictions[mask]
+    
+    if len(actuals) == 0:
+        return {
+            'rmse': np.nan, 'mae': np.nan, 'mape': np.nan, 'r2': np.nan,
+            'n_samples': 0
+        }
+    
+    rmse = np.sqrt(mean_squared_error(actuals, predictions))
+    mae = mean_absolute_error(actuals, predictions)
+    
+    # MAPE: 0으로 나누기 방지
+    mape = np.mean(np.abs((actuals - predictions) / np.where(actuals != 0, actuals, 1))) * 100
+    
+    r2 = r2_score(actuals, predictions)
+    
+    return {
+        'rmse': rmse,
+        'mae': mae,
+        'mape': mape,
+        'r2': r2,
+        'n_samples': len(actuals)
+    }
+
+
+def run_walk_forward_validation(df_hist, val_col, pred_len, n_splits, item_id, token, 
+                                  enhanced_df=None, history_data=None):
+    """
+    Walk-Forward Validation: 시간 순서를 유지하며 여러 구간에서 백테스트
+    
+    Parameters
+    ----------
+    df_hist : DataFrame
+        전체 히스토리 데이터
+    val_col : str
+        예측할 컬럼명 ('score' or 'price')
+    pred_len : int
+        예측 기간
+    n_splits : int
+        분할 개수
+    enhanced_df : DataFrame (optional)
+        고급 피처 DataFrame
+    
+    Returns
+    -------
+    dict with predictions, actuals, dates, accuracy_by_split
+    """
+    import numpy as np
+    
+    df = df_hist.copy().sort_values('date').reset_index(drop=True)
+    total_len = len(df)
+    
+    # 최소 학습 데이터: 전체의 50%
+    min_train = int(total_len * 0.5)
+    # 테스트 구간 크기
+    test_size = pred_len
+    # 각 분할 간 이동 거리
+    step_size = max((total_len - min_train - test_size) // (n_splits - 1), test_size)
+    
+    results = {
+        'predictions': [],
+        'actuals': [],
+        'dates': [],
+        'confidence_intervals': [],
+        'accuracy_by_split': {}
+    }
+    
+    for i in range(n_splits):
+        train_end = min_train + i * step_size
+        test_end = min(train_end + test_size, total_len)
+        
+        if test_end > total_len:
+            break
+        
+        # Train/Test 분할
+        df_train = df.iloc[:train_end].copy()
+        df_test = df.iloc[train_end:test_end].copy()
+        
+        if len(df_test) == 0:
+            break
+        
+        # 고급 피처 준비 (활성화된 경우)
+        enhanced_input = None
+        if enhanced_df is not None and history_data is not None:
+            try:
+                enhanced_input = _prepare_enhanced_fg_features(
+                    df_train.rename(columns={val_col: 'score'}),
+                    history_data
+                )
+            except Exception:
+                enhanced_input = None
+        
+        # 예측 수행
+        try:
+            pred_df, err = run_tabpfn_forecast(
+                tuple(df_train[val_col].tolist()),
+                tuple(df_train['date'].dt.strftime('%Y-%m-%d').tolist()),
+                len(df_test),
+                f"{item_id}_split_{i}",
+                token,
+                enhanced_df=enhanced_input
+            )
+            
+            if err is None and pred_df is not None:
+                point_col = 'target' if 'target' in pred_df.columns else pred_df.columns[2]
+                
+                results['predictions'].extend(pred_df[point_col].tolist())
+                results['actuals'].extend(df_test[val_col].tolist())
+                results['dates'].extend(df_test['date'].tolist())
+                
+                # 신뢰구간 저장
+                ci_data = {}
+                for q in ['0.1', '0.25', '0.5', '0.75', '0.9', 0.1, 0.25, 0.5, 0.75, 0.9]:
+                    if q in pred_df.columns:
+                        ci_data[str(q)] = pred_df[q].tolist()
+                results['confidence_intervals'].append(ci_data)
+                
+                # 분할별 정확도
+                metrics = _calculate_accuracy_metrics(
+                    df_test[val_col].tolist(),
+                    pred_df[point_col].tolist()
+                )
+                results['accuracy_by_split'][f'split_{i+1}'] = metrics
+                
+        except Exception as e:
+            print(f"Split {i+1} failed: {e}")
+            continue
+    
+    return results
+
+
+def run_multi_period_comparison(df_hist, val_col, periods, train_ratio, item_id, token,
+                                  use_enhanced, history_data):
+    """
+    여러 예측 기간에 대한 정확도 비교
+    
+    Parameters
+    ----------
+    periods : list
+        예측 기간 리스트 (예: [7, 14, 30, 60])
+    
+    Returns
+    -------
+    dict with accuracy by period
+    """
+    df = df_hist.copy().sort_values('date').reset_index(drop=True)
+    split_idx = int(len(df) * train_ratio)
+    
+    results = {}
+    
+    for period in periods:
+        if split_idx + period > len(df):
+            continue
+        
+        df_train = df.iloc[:split_idx].copy()
+        df_test = df.iloc[split_idx:split_idx + period].copy()
+        
+        # 고급 피처 준비
+        enhanced_input = None
+        if use_enhanced and history_data is not None:
+            try:
+                enhanced_input = _prepare_enhanced_fg_features(
+                    df_train.rename(columns={val_col: 'score'}),
+                    history_data
+                )
+            except Exception:
+                pass
+        
+        # 예측
+        try:
+            pred_df, err = run_tabpfn_forecast(
+                tuple(df_train[val_col].tolist()),
+                tuple(df_train['date'].dt.strftime('%Y-%m-%d').tolist()),
+                period,
+                f"{item_id}_period_{period}",
+                token,
+                enhanced_df=enhanced_input
+            )
+            
+            if err is None and pred_df is not None:
+                point_col = 'target' if 'target' in pred_df.columns else pred_df.columns[2]
+                metrics = _calculate_accuracy_metrics(
+                    df_test[val_col].tolist(),
+                    pred_df[point_col].tolist()
+                )
+                results[f'{period}일'] = metrics
+        except Exception as e:
+            print(f"Period {period} failed: {e}")
+            continue
+    
+    return results
+
+
+def run_ab_test(df_hist, val_col, pred_len, train_ratio, item_id, token, history_data):
+    """
+    고급 모드 vs 기본 모드 A/B 테스트
+    
+    Returns
+    -------
+    dict with 'enhanced' and 'basic' results
+    """
+    df = df_hist.copy().sort_values('date').reset_index(drop=True)
+    split_idx = int(len(df) * train_ratio)
+    
+    df_train = df.iloc[:split_idx].copy()
+    df_test = df.iloc[split_idx:split_idx + pred_len].copy()
+    
+    if len(df_test) == 0:
+        return None
+    
+    results = {}
+    
+    # 고급 모드
+    try:
+        enhanced_input = _prepare_enhanced_fg_features(
+            df_train.rename(columns={val_col: 'score'}),
+            history_data
+        )
+        pred_df, err = run_tabpfn_forecast(
+            tuple(df_train[val_col].tolist()),
+            tuple(df_train['date'].dt.strftime('%Y-%m-%d').tolist()),
+            len(df_test),
+            f"{item_id}_enhanced",
+            token,
+            enhanced_df=enhanced_input
+        )
+        
+        if err is None and pred_df is not None:
+            point_col = 'target' if 'target' in pred_df.columns else pred_df.columns[2]
+            results['enhanced'] = {
+                'predictions': pred_df[point_col].tolist(),
+                'metrics': _calculate_accuracy_metrics(
+                    df_test[val_col].tolist(),
+                    pred_df[point_col].tolist()
+                )
+            }
+    except Exception as e:
+        print(f"Enhanced mode failed: {e}")
+        results['enhanced'] = None
+    
+    # 기본 모드
+    try:
+        pred_df, err = run_tabpfn_forecast(
+            tuple(df_train[val_col].tolist()),
+            tuple(df_train['date'].dt.strftime('%Y-%m-%d').tolist()),
+            len(df_test),
+            f"{item_id}_basic",
+            token,
+            enhanced_df=None
+        )
+        
+        if err is None and pred_df is not None:
+            point_col = 'target' if 'target' in pred_df.columns else pred_df.columns[2]
+            results['basic'] = {
+                'predictions': pred_df[point_col].tolist(),
+                'metrics': _calculate_accuracy_metrics(
+                    df_test[val_col].tolist(),
+                    pred_df[point_col].tolist()
+                )
+            }
+    except Exception as e:
+        print(f"Basic mode failed: {e}")
+        results['basic'] = None
+    
+    results['actuals'] = df_test[val_col].tolist()
+    results['dates'] = df_test['date'].tolist()
+    
+    return results
+
+
 def _prepare_enhanced_fg_features(df_fg, history_data, window_sizes=[30, 60]):
     """
     Fear & Greed 예측을 위한 고급 피처 엔지니어링
@@ -710,16 +1005,20 @@ def create_forecast_chart(
     is_fg: bool = False,
     y_min: float = None,
     y_max: float = None,
+    backtest_data: dict = None,
 ):
     """
-    히스토리(마지막 90일) + TabPFN-TS 예측 + 신뢰구간 통합 차트.
+    히스토리 + 백테스트 예측 + 미래 예측 + 신뢰구간 통합 차트.
 
     Parameters
     ----------
-    df_hist  : 히스토리 DataFrame — 'date' + hist_col
-    hist_col : 히스토리 값 컬럼명 (예: 'score', 'price')
-    pred_df  : 예측 결과 DataFrame — 'timestamp', 'target', '0.1', '0.9', …
-    is_fg    : True이면 Fear & Greed 배경 구간 표시
+    backtest_data : dict (optional)
+        {
+            'predictions': [...],
+            'actuals': [...],
+            'dates': [...]
+        }
+        백테스트 예측 결과
     """
     if df_hist is None or pred_df is None or len(pred_df) == 0:
         return None
@@ -760,14 +1059,45 @@ def create_forecast_chart(
                           annotation_font_size=9,
                           annotation_font_color="rgba(200,200,200,0.4)")
 
-    # 히스토리 (마지막 90일)
-    df_tail = df_hist[["date", hist_col]].dropna().tail(120).copy()
-    fig.add_trace(go.Scatter(
-        x=df_tail["date"], y=df_tail[hist_col],
-        mode="lines", name="실제 데이터",
-        line=dict(color="#60a5fa", width=2),
-        hovertemplate="<b>%{x|%Y-%m-%d}</b><br>실제: <b>%{y:.2f}</b><extra></extra>",
-    ))
+    # 히스토리 전체 (백테스트 활성화 시)
+    if backtest_data is not None:
+        # 전체 실제 데이터 (연한 색)
+        fig.add_trace(go.Scatter(
+            x=df_hist["date"], y=df_hist[hist_col],
+            mode="lines", name="전체 실제 데이터",
+            line=dict(color="rgba(96,165,250,0.4)", width=1.5),
+            hovertemplate="<b>%{x|%Y-%m-%d}</b><br>실제: <b>%{y:.2f}</b><extra></extra>",
+        ))
+        
+        # 백테스트 예측값 (주황색)
+        if 'predictions' in backtest_data and 'dates' in backtest_data:
+            fig.add_trace(go.Scatter(
+                x=backtest_data['dates'],
+                y=backtest_data['predictions'],
+                mode="lines", name="백테스트 예측",
+                line=dict(color="#fb923c", width=2, dash="dot"),
+                hovertemplate="<b>%{x|%Y-%m-%d}</b><br>백테스트: <b>%{y:.2f}</b><extra></extra>",
+            ))
+            
+            # 백테스트 시작 수직선
+            if len(backtest_data['dates']) > 0:
+                fig.add_vline(
+                    x=pd.to_datetime(backtest_data['dates'][0]).timestamp() * 1000,
+                    line_dash="dot", line_color="rgba(251,146,60,0.35)", line_width=1.5,
+                    annotation_text="  백테스트 시작",
+                    annotation_position="bottom right",
+                    annotation_font_color="rgba(251,146,60,0.7)",
+                    annotation_font_size=10,
+                )
+    else:
+        # 히스토리 (마지막 120일만)
+        df_tail = df_hist[["date", hist_col]].dropna().tail(120).copy()
+        fig.add_trace(go.Scatter(
+            x=df_tail["date"], y=df_tail[hist_col],
+            mode="lines", name="실제 데이터",
+            line=dict(color="#60a5fa", width=2),
+            hovertemplate="<b>%{x|%Y-%m-%d}</b><br>실제: <b>%{y:.2f}</b><extra></extra>",
+        ))
 
     # 신뢰구간 10%~90% (연한 밴드)
     if q10 is not None and q90 is not None:
@@ -793,22 +1123,22 @@ def create_forecast_chart(
             hoverinfo="skip",
         ))
 
-    # 예측 포인트 라인
+    # 미래 예측 포인트 라인
     fig.add_trace(go.Scatter(
         x=pred_df["date"], y=pred_df[point_col],
-        mode="lines+markers", name="TabPFN-TS 예측",
+        mode="lines+markers", name="미래 예측",
         line=dict(color="#fbbf24", width=2.5, dash="dash"),
         marker=dict(size=5, color="#fbbf24",
                     line=dict(color="white", width=1)),
-        hovertemplate="<b>%{x|%Y-%m-%d}</b><br>예측: <b>%{y:.2f}</b><extra></extra>",
+        hovertemplate="<b>%{x|%Y-%m-%d}</b><br>미래 예측: <b>%{y:.2f}</b><extra></extra>",
     ))
 
-    # 예측 시작 수직선
+    # 미래 예측 시작 수직선
     split_date = df_hist["date"].max()
     fig.add_vline(
         x=split_date.timestamp() * 1000,
         line_dash="dot", line_color="rgba(255,255,255,0.35)", line_width=1.5,
-        annotation_text="  예측 시작",
+        annotation_text="  미래 예측 시작",
         annotation_position="top right",
         annotation_font_color="rgba(200,200,200,0.7)",
         annotation_font_size=11,
@@ -826,7 +1156,7 @@ def create_forecast_chart(
         paper_bgcolor="#0e1117",
         font=dict(color="white"),
         hovermode="x unified",
-        height=430,
+        height=500,
         showlegend=True,
         legend=dict(
             orientation="h", y=1.02, x=1, xanchor="right",
@@ -2405,7 +2735,7 @@ tabpfn-time-series>=1.0.0
 - GPU 불필요 · TabPFN Cloud API 사용
                 """)
         elif ts_installed:
-            # ── 컨트롤 ──
+            # ── 기본 컨트롤 ──
             fc_c1, fc_c2, fc_c3, fc_c4, fc_c5 = st.columns(5)
             with fc_c1:
                 fc_target = st.selectbox(
@@ -2445,15 +2775,76 @@ tabpfn-time-series>=1.0.0
                     use_container_width=True,
                 )
 
+            # ── 백테스트 옵션 패널 ──
+            st.markdown("---")
+            st.markdown("### 🔬 백테스트 & 검증 옵션")
+            
+            bt_c1, bt_c2, bt_c3, bt_c4 = st.columns(4)
+            with bt_c1:
+                enable_backtest = st.checkbox(
+                    "☑️ 백테스트 표시",
+                    value=False,
+                    help="과거 데이터에 대한 예측 정확도 검증",
+                    key="fc_backtest"
+                )
+            with bt_c2:
+                if enable_backtest:
+                    backtest_ratio = st.selectbox(
+                        "학습 비율",
+                        [0.6, 0.7, 0.8, 0.9],
+                        index=2,
+                        format_func=lambda x: f"{int(x*100)}%",
+                        key="fc_bt_ratio"
+                    )
+                else:
+                    backtest_ratio = 0.8
+            with bt_c3:
+                enable_walkforward = st.checkbox(
+                    "☑️ Walk-Forward",
+                    value=False,
+                    help="여러 시점에서 반복 백테스트 (시간 이동 검증)",
+                    key="fc_walkforward",
+                    disabled=not enable_backtest
+                )
+            with bt_c4:
+                if enable_walkforward:
+                    wf_splits = st.selectbox(
+                        "분할 개수",
+                        [3, 5, 7, 10],
+                        index=1,
+                        key="fc_wf_splits"
+                    )
+                else:
+                    wf_splits = 5
+            
+            bt_c5, bt_c6, bt_c7, bt_c8 = st.columns(4)
+            with bt_c5:
+                enable_period_comp = st.checkbox(
+                    "☑️ 예측 기간별 비교",
+                    value=False,
+                    help="7/14/30/60일 예측 정확도 비교",
+                    key="fc_period_comp",
+                    disabled=not enable_backtest
+                )
+            with bt_c6:
+                enable_ab_test = st.checkbox(
+                    "☑️ A/B 테스트",
+                    value=False,
+                    help="고급 모드 vs 기본 모드 정확도 비교",
+                    key="fc_ab_test",
+                    disabled=not enable_backtest or fc_target != "Fear & Greed Index"
+                )
+
             ci_note = "예측값 + 80%·50% 신뢰구간" if ts_major >= 1 else "예측값만 (신뢰구간은 v1.x 이상)"
-            enhanced_note = " | 🧠 고급 피처: VIX, Put/Call, Junk Bond, 로그수익률" if use_enhanced else ""
+            enhanced_note = " | 🧠 고급 피처" if use_enhanced else ""
+            bt_note = " | 🔬 백테스트" if enable_backtest else ""
             
             # ── 예측 정보 배너 ──
             st.info(
-                f"📋 학습: 최근 **{'전체' if train_window==0 else f'{train_window}일'}** 데이터 → "
+                f"📋 학습: **{'전체' if train_window==0 else f'최근 {train_window}일'}** → "
                 f"미래 **{pred_len}일** 예측 | "
                 f"모델: TabPFN-TS v{ts_ver_str} | "
-                f"{ci_note}{enhanced_note}"
+                f"{ci_note}{enhanced_note}{bt_note}"
             )
             
             if use_enhanced:
@@ -2471,6 +2862,28 @@ tabpfn-time-series>=1.0.0
                     4. **윈도우 통계**: 30일/60일 이동평균, 표준편차, 최대/최소
                     
                     **예상 효과**: 예측 정확도 **20~40% 향상** (GIFT-EVAL 벤치마크 기준)
+                    """)
+            
+            if enable_backtest:
+                with st.expander("🔬 백테스트 & 검증 옵션 설명"):
+                    st.markdown("""
+                    **백테스트 표시:**
+                    - 과거 데이터를 학습/테스트로 분할하여 예측 정확도 검증
+                    - 차트에 **과거 예측값**(주황색)과 **실제값**(파란색) 비교 표시
+                    
+                    **Walk-Forward Validation:**
+                    - 시간 순서를 유지하며 여러 구간에서 반복 백테스트
+                    - 시간에 따른 모델 안정성 및 약점 발견
+                    - 구간별 정확도 통계 제공
+                    
+                    **예측 기간별 비교:**
+                    - 7일/14일/30일/60일 예측의 정확도를 동시 비교
+                    - 최적 예측 기간 발견 (단기 vs 장기)
+                    
+                    **A/B 테스트:**
+                    - 동일 데이터에 대해 고급 모드 vs 기본 모드 동시 예측
+                    - 고급 피처의 실질적 개선 효과 정량화
+                    - Side-by-Side 비교 차트 제공
                     """)
 
             if run_btn:
@@ -2548,6 +2961,79 @@ tabpfn-time-series>=1.0.0
                         values_t = tuple(_clean_v)
                         dates_t  = tuple(_clean_d)
 
+                        # ═══════════════════════════════════════════════════════════
+                        # 백테스트 실행
+                        # ═══════════════════════════════════════════════════════════
+                        backtest_results = None
+                        wf_results = None
+                        period_comp_results = None
+                        ab_test_results = None
+                        
+                        if enable_backtest:
+                            # ── 단순 백테스트 ──
+                            split_idx = int(len(df_src) * backtest_ratio)
+                            if split_idx + pred_len <= len(df_src):
+                                df_train_bt = df_src.iloc[:split_idx].copy()
+                                df_test_bt = df_src.iloc[split_idx:split_idx + pred_len].copy()
+                                
+                                enhanced_bt = None
+                                if use_enhanced and target_key == "fg":
+                                    try:
+                                        enhanced_bt = _prepare_enhanced_fg_features(
+                                            df_train_bt.rename(columns={val_col: 'score'}),
+                                            history_data
+                                        )
+                                    except Exception:
+                                        pass
+                                
+                                with st.spinner("🔬 백테스트 예측 실행 중..."):
+                                    pred_bt, err_bt = run_tabpfn_forecast(
+                                        tuple(df_train_bt[val_col].tolist()),
+                                        tuple(df_train_bt['date'].dt.strftime('%Y-%m-%d').tolist()),
+                                        len(df_test_bt),
+                                        f"{fc_item}_backtest",
+                                        TABPFN_TOKEN,
+                                        enhanced_df=enhanced_bt
+                                    )
+                                    
+                                    if err_bt is None and pred_bt is not None:
+                                        point_col_bt = 'target' if 'target' in pred_bt.columns else pred_bt.columns[2]
+                                        backtest_results = {
+                                            'predictions': pred_bt[point_col_bt].tolist(),
+                                            'actuals': df_test_bt[val_col].tolist(),
+                                            'dates': df_test_bt['date'].tolist()
+                                        }
+                            
+                            # ── Walk-Forward Validation ──
+                            if enable_walkforward and target_key == "fg":
+                                with st.spinner(f"🔄 Walk-Forward Validation 실행 중 ({wf_splits}개 구간)..."):
+                                    wf_results = run_walk_forward_validation(
+                                        df_src, val_col, pred_len, wf_splits,
+                                        fc_item, TABPFN_TOKEN,
+                                        enhanced_df=enhanced_df_input if use_enhanced else None,
+                                        history_data=history_data if use_enhanced else None
+                                    )
+                            
+                            # ── 예측 기간별 비교 ──
+                            if enable_period_comp and target_key == "fg":
+                                with st.spinner("📊 예측 기간별 정확도 비교 중..."):
+                                    period_comp_results = run_multi_period_comparison(
+                                        df_src, val_col, [7, 14, 30, 60],
+                                        backtest_ratio, fc_item, TABPFN_TOKEN,
+                                        use_enhanced, history_data
+                                    )
+                            
+                            # ── A/B 테스트 ──
+                            if enable_ab_test and target_key == "fg":
+                                with st.spinner("🔬 A/B 테스트 (고급 vs 기본) 실행 중..."):
+                                    ab_test_results = run_ab_test(
+                                        df_src, val_col, pred_len, backtest_ratio,
+                                        fc_item, TABPFN_TOKEN, history_data
+                                    )
+
+                        # ═══════════════════════════════════════════════════════════
+                        # 미래 예측 실행
+                        # ═══════════════════════════════════════════════════════════
                         mode_label = "🧠 고급 모드" if enhanced_df_input is not None else "기본 모드"
                         with st.spinner(
                             f"{mode_label} {fc_title} 예측 중… "
@@ -2562,21 +3048,217 @@ tabpfn-time-series>=1.0.0
                             st.error(f"❌ {err}")
                             continue
 
-                        # ── 차트 ──
-                        fig_fc = create_forecast_chart(
-                            df_hist=df_src[["date", val_col]],
-                            hist_col=val_col,
-                            pred_df=pred_df,
-                            title=fc_title,
-                            y_label=fc_ylabel,
-                            is_fg=fc_is_fg,
-                            y_min=fc_ymin,
-                            y_max=fc_ymax,
-                        )
-                        if fig_fc:
-                            st.plotly_chart(fig_fc, use_container_width=True)
-                        else:
-                            st.error("차트 생성 실패 — 예측 결과를 확인하세요.")
+                        # ═══════════════════════════════════════════════════════════
+                        # 결과 표시: 탭 구성
+                        # ═══════════════════════════════════════════════════════════
+                        result_tabs = ["📊 통합 차트"]
+                        if wf_results: result_tabs.append("🔄 Walk-Forward")
+                        if period_comp_results: result_tabs.append("📈 기간별 비교")
+                        if ab_test_results: result_tabs.append("🔬 A/B 테스트")
+                        
+                        tabs = st.tabs(result_tabs)
+                        
+                        # ── Tab 1: 통합 차트 ──
+                        with tabs[0]:
+                            fig_fc = create_forecast_chart(
+                                df_hist=df_src[["date", val_col]],
+                                hist_col=val_col,
+                                pred_df=pred_df,
+                                title=fc_title,
+                                y_label=fc_ylabel,
+                                is_fg=fc_is_fg,
+                                y_min=fc_ymin,
+                                y_max=fc_ymax,
+                                backtest_data=backtest_results
+                            )
+                            if fig_fc:
+                                st.plotly_chart(fig_fc, use_container_width=True)
+                            else:
+                                st.error("차트 생성 실패")
+                            
+                            # 백테스트 정확도 표시
+                            if backtest_results:
+                                metrics = _calculate_accuracy_metrics(
+                                    backtest_results['actuals'],
+                                    backtest_results['predictions']
+                                )
+                                
+                                st.markdown("#### 📈 백테스트 정확도 지표")
+                                met_cols = st.columns(4)
+                                met_cols[0].metric("RMSE", f"{metrics['rmse']:.2f}")
+                                met_cols[1].metric("MAE", f"{metrics['mae']:.2f}")
+                                met_cols[2].metric("MAPE", f"{metrics['mape']:.1f}%")
+                                met_cols[3].metric("R²", f"{metrics['r2']:.3f}")
+                                
+                                st.info(
+                                    f"✅ 백테스트 검증 완료 ({metrics['n_samples']}일 구간)\n\n"
+                                    f"낮은 RMSE/MAE와 높은 R² 값은 모델의 신뢰성을 의미합니다."
+                                )
+                        
+                        # ── Tab 2: Walk-Forward ──
+                        if wf_results and len(result_tabs) > 1:
+                            with tabs[1]:
+                                st.markdown("#### 🔄 Walk-Forward Validation 결과")
+                                st.markdown(f"시간 순서를 유지하며 **{wf_splits}개 구간**에서 반복 백테스트")
+                                
+                                # 구간별 정확도 테이블
+                                if wf_results['accuracy_by_split']:
+                                    split_rows = []
+                                    for split_name, metrics in wf_results['accuracy_by_split'].items():
+                                        split_rows.append({
+                                            '구간': split_name.replace('split_', 'Split '),
+                                            'RMSE': f"{metrics['rmse']:.2f}",
+                                            'MAE': f"{metrics['mae']:.2f}",
+                                            'MAPE': f"{metrics['mape']:.1f}%",
+                                            'R²': f"{metrics['r2']:.3f}",
+                                            '샘플': metrics['n_samples']
+                                        })
+                                    df_splits = pd.DataFrame(split_rows)
+                                    st.dataframe(df_splits, hide_index=True, use_container_width=True)
+                                    
+                                    # 평균 정확도
+                                    avg_rmse = np.mean([m['rmse'] for m in wf_results['accuracy_by_split'].values()])
+                                    avg_mae = np.mean([m['mae'] for m in wf_results['accuracy_by_split'].values()])
+                                    avg_mape = np.mean([m['mape'] for m in wf_results['accuracy_by_split'].values()])
+                                    avg_r2 = np.mean([m['r2'] for m in wf_results['accuracy_by_split'].values()])
+                                    std_rmse = np.std([m['rmse'] for m in wf_results['accuracy_by_split'].values()])
+                                    
+                                    st.success(
+                                        f"**평균 정확도** (전체 구간)\n\n"
+                                        f"RMSE: **{avg_rmse:.2f} ± {std_rmse:.2f}** | "
+                                        f"MAE: **{avg_mae:.2f}** | "
+                                        f"MAPE: **{avg_mape:.1f}%** | "
+                                        f"R²: **{avg_r2:.3f}**\n\n"
+                                        f"💡 낮은 표준편차는 시간에 따른 안정적인 성능을 의미합니다."
+                                    )
+                        
+                        # ── Tab 3: 예측 기간별 비교 ──
+                        if period_comp_results and '📈 기간별 비교' in result_tabs:
+                            tab_idx = result_tabs.index('📈 기간별 비교')
+                            with tabs[tab_idx]:
+                                st.markdown("#### 📈 예측 기간별 정확도 비교")
+                                
+                                period_rows = []
+                                for period, metrics in period_comp_results.items():
+                                    period_rows.append({
+                                        '예측 기간': period,
+                                        'RMSE': metrics['rmse'],
+                                        'MAE': metrics['mae'],
+                                        'MAPE': f"{metrics['mape']:.1f}%",
+                                        'R²': f"{metrics['r2']:.3f}"
+                                    })
+                                df_periods = pd.DataFrame(period_rows)
+                                
+                                # 테이블
+                                st.dataframe(df_periods, hide_index=True, use_container_width=True)
+                                
+                                # 기간별 RMSE 차트
+                                fig_period = go.Figure()
+                                fig_period.add_trace(go.Scatter(
+                                    x=[r['예측 기간'] for r in period_rows],
+                                    y=[r['RMSE'] for r in period_rows],
+                                    mode='lines+markers',
+                                    name='RMSE',
+                                    line=dict(color='#f97316', width=3),
+                                    marker=dict(size=10)
+                                ))
+                                fig_period.update_layout(
+                                    title="예측 기간 vs RMSE (낮을수록 정확)",
+                                    xaxis_title="예측 기간",
+                                    yaxis_title="RMSE",
+                                    plot_bgcolor='#0e1117',
+                                    paper_bgcolor='#0e1117',
+                                    font=dict(color='white'),
+                                    height=350
+                                )
+                                st.plotly_chart(fig_period, use_container_width=True)
+                                
+                                # 최적 기간
+                                best_period = min(period_rows, key=lambda x: x['RMSE'])
+                                st.info(
+                                    f"💡 **최적 예측 기간**: {best_period['예측 기간']} "
+                                    f"(RMSE: {best_period['RMSE']:.2f})\n\n"
+                                    "단기 예측일수록 정확도가 높은 경향이 있습니다."
+                                )
+                        
+                        # ── Tab 4: A/B 테스트 ──
+                        if ab_test_results and '🔬 A/B 테스트' in result_tabs:
+                            tab_idx = result_tabs.index('🔬 A/B 테스트')
+                            with tabs[tab_idx]:
+                                st.markdown("#### 🔬 고급 모드 vs 기본 모드 A/B 테스트")
+                                
+                                if ab_test_results['enhanced'] and ab_test_results['basic']:
+                                    # 정확도 비교
+                                    comp_cols = st.columns(2)
+                                    
+                                    with comp_cols[0]:
+                                        st.markdown("**🧠 고급 모드**")
+                                        enh_m = ab_test_results['enhanced']['metrics']
+                                        st.metric("RMSE", f"{enh_m['rmse']:.2f}")
+                                        st.metric("MAE", f"{enh_m['mae']:.2f}")
+                                        st.metric("MAPE", f"{enh_m['mape']:.1f}%")
+                                        st.metric("R²", f"{enh_m['r2']:.3f}")
+                                    
+                                    with comp_cols[1]:
+                                        st.markdown("**📈 기본 모드**")
+                                        bas_m = ab_test_results['basic']['metrics']
+                                        st.metric("RMSE", f"{bas_m['rmse']:.2f}")
+                                        st.metric("MAE", f"{bas_m['mae']:.2f}")
+                                        st.metric("MAPE", f"{bas_m['mape']:.1f}%")
+                                        st.metric("R²", f"{bas_m['r2']:.3f}")
+                                    
+                                    # 개선율 계산
+                                    improvement = (bas_m['rmse'] - enh_m['rmse']) / bas_m['rmse'] * 100
+                                    
+                                    if improvement > 0:
+                                        st.success(
+                                            f"✅ **고급 모드가 {improvement:.1f}% 더 정확합니다!**\n\n"
+                                            f"고급 피처(VIX, Put/Call, Junk Bond, 로그수익률)가 예측 성능을 향상시켰습니다."
+                                        )
+                                    else:
+                                        st.warning(
+                                            f"⚠️ 이 데이터에서는 기본 모드가 {abs(improvement):.1f}% 더 정확합니다.\n\n"
+                                            "데이터 특성상 추가 피처가 노이즈로 작용했을 수 있습니다."
+                                        )
+                                    
+                                    # Side-by-Side 비교 차트
+                                    fig_ab = go.Figure()
+                                    
+                                    fig_ab.add_trace(go.Scatter(
+                                        x=ab_test_results['dates'],
+                                        y=ab_test_results['actuals'],
+                                        mode='lines',
+                                        name='실제값',
+                                        line=dict(color='#60a5fa', width=2)
+                                    ))
+                                    
+                                    fig_ab.add_trace(go.Scatter(
+                                        x=ab_test_results['dates'],
+                                        y=ab_test_results['enhanced']['predictions'],
+                                        mode='lines',
+                                        name='고급 모드 예측',
+                                        line=dict(color='#22c55e', width=2, dash='dash')
+                                    ))
+                                    
+                                    fig_ab.add_trace(go.Scatter(
+                                        x=ab_test_results['dates'],
+                                        y=ab_test_results['basic']['predictions'],
+                                        mode='lines',
+                                        name='기본 모드 예측',
+                                        line=dict(color='#f97316', width=2, dash='dot')
+                                    ))
+                                    
+                                    fig_ab.update_layout(
+                                        title="실제값 vs 고급 모드 vs 기본 모드",
+                                        xaxis_title="날짜",
+                                        yaxis_title=fc_ylabel,
+                                        plot_bgcolor='#0e1117',
+                                        paper_bgcolor='#0e1117',
+                                        font=dict(color='white'),
+                                        hovermode='x unified',
+                                        height=400
+                                    )
+                                    st.plotly_chart(fig_ab, use_container_width=True)
 
                         # ── 예측 결과 요약 테이블 ──
                         with st.expander("📋 예측 수치 상세 보기"):
