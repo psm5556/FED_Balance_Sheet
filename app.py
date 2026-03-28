@@ -822,10 +822,12 @@ def _run_tabpfn_v1(values, timestamps, pred_len, item_id, token, enhanced_df=Non
         tsdf_data = df.copy()
         tsdf_data['target'] = tsdf_data['score']
         
-        # MultiIndex 생성
+        # MultiIndex 생성 (레벨명을 기본 모드와 동일하게 'timestamp'로 통일)
         tsdf_data = tsdf_data.reset_index()
         tsdf_data['item_id'] = item_id
-        tsdf_data = tsdf_data.set_index(['item_id', 'date'])
+        if 'date' in tsdf_data.columns and 'timestamp' not in tsdf_data.columns:
+            tsdf_data = tsdf_data.rename(columns={'date': 'timestamp'})
+        tsdf_data = tsdf_data.set_index(['item_id', 'timestamp'])
         
         tsdf = TimeSeriesDataFrame(tsdf_data)
         train, _ = tsdf.train_test_split(prediction_length=pred_len)
@@ -877,7 +879,7 @@ def _run_tabpfn_v1(values, timestamps, pred_len, item_id, token, enhanced_df=Non
     # ── 결과 정리 ─────────────────────────────────────────────────────────
     pred_df = pred.reset_index()
     ts_candidates = [c for c in pred_df.columns
-                     if "time" in str(c).lower() and c != "item_id"]
+                     if ("time" in str(c).lower() or "date" in str(c).lower()) and c != "item_id"]
     if ts_candidates and "timestamp" not in pred_df.columns:
         pred_df = pred_df.rename(columns={ts_candidates[0]: "timestamp"})
     pred_df["timestamp"] = pd.to_datetime(pred_df["timestamp"])
